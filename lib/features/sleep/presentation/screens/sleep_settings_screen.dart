@@ -10,6 +10,7 @@ import 'manage_sleep_factors_screen.dart';
 import 'sleep_target_screen.dart';
 import 'manage_sleep_templates_screen.dart';
 import 'wind_down_settings_screen.dart';
+import 'low_sleep_settings_screen.dart';
 import 'sleep_statistics_screen.dart';
 import 'sleep_debt_report_screen.dart';
 
@@ -124,6 +125,21 @@ class _SleepSettingsScreenState extends ConsumerState<SleepSettingsScreen> {
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) => const WindDownSettingsScreen(),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _buildSettingCard(
+                  context,
+                  isDark,
+                  title: 'Low Sleep Reminder',
+                  subtitle: 'Notify when logged sleep is below your threshold',
+                  icon: Icons.warning_amber_rounded,
+                  iconColor: Colors.orange,
+                  trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const LowSleepSettingsScreen(),
                     ),
                   ),
                 ),

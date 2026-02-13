@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/notifications/notifications.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../routing/app_router.dart';
+import '../data/services/low_sleep_reminder_service.dart';
 import '../data/services/sleep_target_service.dart';
 import '../data/services/wind_down_schedule_service.dart';
 import 'sleep_notification_contract.dart';
@@ -116,11 +117,14 @@ class SleepNotificationAdapter implements MiniAppNotificationAdapter {
     String section,
   ) async {
     if (section == SleepNotificationContract.sectionLowSleep) {
+      final hours =
+          await LowSleepReminderService().getLastScheduledSleepHoursFormatted();
       return {
         '{goalName}': '7 hours',
         '{bedtime}': '10:00 PM',
         '{wakeTime}': '6:00 AM',
         '{duration}': '6.0h',
+        '{sleepHours}': hours,
       };
     }
 

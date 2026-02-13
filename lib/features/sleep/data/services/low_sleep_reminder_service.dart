@@ -1,19 +1,17 @@
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../core/notifications/models/notification_hub_schedule_request.dart';
-import '../../../core/notifications/notification_hub.dart';
-import '../models/sleep_record.dart';
-import '../notifications/sleep_notification_contract.dart';
+import '../../notifications/sleep_notification_contract.dart';
 
-/// Manages low-sleep reminder settings and scheduling.
+/// Manages low-sleep reminder settings.
 ///
-/// When sleep duration is below the user-defined threshold, schedules
-/// a one-shot notification to remind them later (e.g. "You slept only X hours").
+/// Scheduling is done by [UniversalNotificationScheduler] (sync-driven,
+/// like wind-down). This service only persists user preferences and
+/// last-scheduled sleep hours for variable resolution.
 class LowSleepReminderService {
   static const String _enabledKey = 'sleep_lowsleep_reminder_enabled';
   static const String _thresholdHoursKey = 'sleep_lowsleep_threshold_hours';
   static const String _hoursAfterWakeKey = 'sleep_lowsleep_hours_after_wake';
+  static const String _lastScheduledHoursKey = 'sleep_lowsleep_last_scheduled_hours';
 
   static const double _defaultThreshold = 6.0;
   static const double _defaultHoursAfterWake = 2.0;
@@ -34,9 +32,6 @@ class LowSleepReminderService {
   Future<void> setEnabled(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_enabledKey, value);
-    if (!value) {
-      await _cancelExistingReminder();
-    }
   }
 
   /// Threshold in hours: notify when sleep is below this.
@@ -63,59 +58,17 @@ class LowSleepReminderService {
     await prefs.setDouble(_hoursAfterWakeKey, hours);
   }
 
-  /// Check if the record qualifies as low sleep and schedule reminder if enabled.
-  ///
-  /// Only considers main sleep (not naps). Call after creating a new sleep record.
-  Future<void> checkAndSchedule(SleepRecord record) async {
-    if (record.isNap) return;
-    if (!await isEnabled()) return;
-
-    final threshold = await getThresholdHours();
-    final hours = record.actualSleepHours;
-    if (hours >= threshold) return;
-
-    final hoursAfterWake = await getHoursAfterWake();
-    final scheduledAt = record.wakeTime.add(
-      Duration(hours: hoursAfterWake.floor(), minutes: ((hoursAfterWake % 1) * 60).round()),
-    );
-
-    if (scheduledAt.isBefore(DateTime.now())) {
-      return;
-    }
-
-    await _cancelExistingReminder();
-
-    final hub = NotificationHub();
-    final result = await hub.schedule(
-      NotificationHubScheduleRequest(
-        moduleId: SleepNotificationContract.moduleId,
-        entityId: SleepNotificationContract.entityLowSleep,
-        title: 'Low sleep alert',
-        body:
-            'You slept only ${hours.toStringAsFixed(1)} hours last night. '
-            'Consider an earlier bedtime tonight.',
-        scheduledAt: scheduledAt,
-        extras: {
-          SleepNotificationContract.extraSleepHours: hours.toStringAsFixed(1),
-          SleepNotificationContract.extraWakeDate:
-              '${record.wakeTime.year}-${record.wakeTime.month.toString().padLeft(2, '0')}-${record.wakeTime.day.toString().padLeft(2, '0')}',
-        },
-        type: 'regular',
-      ),
-    );
-
-    if (kDebugMode && result.success) {
-      debugPrint(
-        'LowSleepReminderService: Scheduled reminder for ${scheduledAt.toIso8601String()} (slept ${hours.toStringAsFixed(1)}h < ${threshold}h)',
-      );
-    }
+  /// Last sleep hours when a low-sleep reminder was scheduled.
+  /// Used by the adapter for {sleepHours} variable resolution.
+  Future<void> setLastScheduledSleepHours(double hours) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_lastScheduledHoursKey, hours);
   }
 
-  Future<void> _cancelExistingReminder() async {
-    final hub = NotificationHub();
-    await hub.cancelForEntity(
-      moduleId: SleepNotificationContract.moduleId,
-      entityId: SleepNotificationContract.entityLowSleep,
-    );
+  /// Get last scheduled sleep hours (for variable resolution).
+  Future<String> getLastScheduledSleepHoursFormatted() async {
+    final prefs = await SharedPreferences.getInstance();
+    final h = prefs.getDouble(_lastScheduledHoursKey);
+    return h != null ? h.toStringAsFixed(1) : '0';
   }
 }

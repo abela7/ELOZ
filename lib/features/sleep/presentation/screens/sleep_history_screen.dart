@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:table_calendar/table_calendar.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/notifications/services/universal_notification_scheduler.dart';
 import '../../../../core/theme/dark_gradient.dart';
 import '../../data/models/sleep_record.dart';
 import '../../data/models/sleep_factor.dart';
@@ -1963,9 +1964,9 @@ class _SleepHistoryScreenState extends ConsumerState<SleepHistoryScreen> {
                           await ref
                               .read(sleepRecordRepositoryProvider)
                               .create(newRecord);
-                          await ref
-                              .read(lowSleepReminderServiceProvider)
-                              .checkAndSchedule(newRecord);
+                          unawaited(
+                            UniversalNotificationScheduler().syncAll(),
+                          );
                         } else {
                           await ref
                               .read(sleepRecordRepositoryProvider)

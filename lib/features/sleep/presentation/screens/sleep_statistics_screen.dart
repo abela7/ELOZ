@@ -10,7 +10,6 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/theme/dark_gradient.dart';
 import '../../data/models/sleep_factor.dart';
 import '../../data/models/sleep_record.dart';
-import '../../data/services/low_sleep_reminder_service.dart';
 import '../../data/services/sleep_target_service.dart';
 import '../providers/sleep_providers.dart';
 import 'sleep_calendar_screen.dart';
@@ -103,8 +102,6 @@ class _SleepStatisticsScreenState
               _periodChips(isDark),
               const SizedBox(height: 12),
               _dateNav(isDark, range),
-              const SizedBox(height: 16),
-              _LowSleepReminderCard(isDark: isDark),
               const SizedBox(height: 20),
               if (_period == _Period.factors)
                 SleepFactorInsightsContent(dateRange: range)
@@ -319,179 +316,6 @@ class _SleepStatisticsScreenState
         _observations(isDark, days, settings, avgHours, avgScore,
             consistency, sleepDebt),
       ],
-    );
-  }
-
-  // ══════════════════════════ LOW SLEEP REMINDER ═══════════════════════════
-  Widget _LowSleepReminderCard({required bool isDark}) {
-    final settingsAsync = ref.watch(lowSleepReminderSettingsProvider);
-    return settingsAsync.when(
-      data: (s) {
-        final service = ref.read(lowSleepReminderServiceProvider);
-        return Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: isDark ? Colors.white.withOpacity(0.04) : Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: isDark
-                ? null
-                : [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.withOpacity(isDark ? 0.2 : 0.1),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(
-                      Icons.warning_amber_rounded,
-                      size: 18,
-                      color: Colors.orange,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Low Sleep Reminder',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: isDark ? Colors.white : Colors.black87,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Notify when sleep is below your threshold',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: isDark
-                                ? Colors.white54
-                                : Colors.black45,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Switch(
-                    value: s.enabled,
-                    onChanged: (v) async {
-                      HapticFeedback.lightImpact();
-                      await service.setEnabled(v);
-                      ref.invalidate(lowSleepReminderSettingsProvider);
-                      if (mounted) setState(() {});
-                    },
-                    activeColor: _gold,
-                  ),
-                ],
-              ),
-              if (s.enabled) ...[
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Text(
-                      'Notify when sleep <',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? Colors.white54 : Colors.black45,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    DropdownButton<double>(
-                      value: LowSleepReminderService.thresholdOptions
-                          .contains(s.threshold)
-                          ? s.threshold
-                          : LowSleepReminderService.thresholdOptions.first,
-                      items: LowSleepReminderService.thresholdOptions
-                          .map((h) => DropdownMenuItem(
-                                value: h,
-                                child: Text(
-                                  '${h.toInt()}h',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: isDark
-                                        ? Colors.white
-                                        : Colors.black87,
-                                  ),
-                                ),
-                              ))
-                          .toList(),
-                      onChanged: (v) async {
-                        if (v == null) return;
-                        HapticFeedback.selectionClick();
-                        await service.setThresholdHours(v);
-                        ref.invalidate(lowSleepReminderSettingsProvider);
-                        if (mounted) setState(() {});
-                      },
-                      underline: const SizedBox.shrink(),
-                      dropdownColor: isDark
-                          ? const Color(0xFF2D3139)
-                          : Colors.white,
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Remind',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? Colors.white54 : Colors.black45,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    DropdownButton<double>(
-                      value: LowSleepReminderService.hoursAfterWakeOptions
-                          .contains(s.hoursAfterWake)
-                          ? s.hoursAfterWake
-                          : LowSleepReminderService.hoursAfterWakeOptions.first,
-                      items: LowSleepReminderService.hoursAfterWakeOptions
-                          .map((h) => DropdownMenuItem(
-                                value: h,
-                                child: Text(
-                                  '${h.toInt()}h after wake',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: isDark
-                                        ? Colors.white
-                                        : Colors.black87,
-                                  ),
-                                ),
-                              ))
-                          .toList(),
-                      onChanged: (v) async {
-                        if (v == null) return;
-                        HapticFeedback.selectionClick();
-                        await service.setHoursAfterWake(v);
-                        ref.invalidate(lowSleepReminderSettingsProvider);
-                        if (mounted) setState(() {});
-                      },
-                      underline: const SizedBox.shrink(),
-                      dropdownColor: isDark
-                          ? const Color(0xFF2D3139)
-                          : Colors.white,
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        );
-      },
-      loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
     );
   }
 

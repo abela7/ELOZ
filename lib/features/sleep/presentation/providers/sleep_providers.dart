@@ -88,17 +88,6 @@ final lowSleepReminderServiceProvider = Provider<LowSleepReminderService>((ref) 
   return LowSleepReminderService();
 });
 
-/// Low-sleep reminder settings (enabled + threshold) for UI binding.
-final lowSleepReminderSettingsProvider =
-    FutureProvider<({bool enabled, double threshold, double hoursAfterWake})>((ref) async {
-  final service = ref.watch(lowSleepReminderServiceProvider);
-  return (
-    enabled: await service.isEnabled(),
-    threshold: await service.getThresholdHours(),
-    hoursAfterWake: await service.getHoursAfterWake(),
-  );
-});
-
 /// Sleep target settings (target hours + dangerous/poor/healthy thresholds).
 final sleepTargetSettingsProvider = FutureProvider<SleepTargetSettings>((ref) async {
   final service = ref.watch(sleepTargetServiceProvider);
