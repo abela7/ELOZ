@@ -17,6 +17,7 @@ class NotificationHubDashboardSummary {
   final int scheduledToday;
   final int tappedToday;
   final int actionToday;
+  final int snoozedToday;
   final int cancelledToday;
   final int failedToday;
 
@@ -27,6 +28,7 @@ class NotificationHubDashboardSummary {
     required this.scheduledToday,
     required this.tappedToday,
     required this.actionToday,
+    required this.snoozedToday,
     required this.cancelledToday,
     required this.failedToday,
   });

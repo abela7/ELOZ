@@ -16,8 +16,6 @@ import 'task_settings_screen.dart';
 import 'task_report_screen.dart';
 import 'routines_screen.dart';
 import '../widgets/task_detail_modal.dart';
-import '../../../../features/notifications_hub/presentation/widgets/universal_reminder_section.dart';
-import '../../notifications/task_notification_creator_context.dart';
 import '../../../../core/widgets/date_navigator_widget.dart';
 import '../providers/task_providers.dart';
 import '../providers/category_providers.dart';
@@ -1117,7 +1115,7 @@ class _TaskCard extends ConsumerWidget {
                 style: TextStyle(color: isDark ? Colors.white : Colors.black),
               ),
               subtitle: Text(
-                'Add, edit, or delete reminders',
+                'View current reminders',
                 style: TextStyle(
                   color: isDark ? Colors.white54 : Colors.black54,
                   fontSize: 12,
@@ -1202,8 +1200,14 @@ class _TaskCard extends ConsumerWidget {
   }
 
   Future<void> _showRemindersEditor(BuildContext context, WidgetRef ref) async {
-
     final isDarkLocal = Theme.of(context).brightness == Brightness.dark;
+    final raw = (task.remindersJson ?? '').trim();
+    final reminders = raw.isEmpty
+        ? const <Reminder>[]
+        : (raw.startsWith('[')
+            ? Reminder.decodeList(raw)
+            : ReminderManager().parseReminderString(raw));
+
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -1245,13 +1249,93 @@ class _TaskCard extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              UniversalReminderSection(
-                creatorContext: TaskNotificationCreatorContext.forTask(
-                  taskId: task.id,
-                  taskTitle: task.title,
+              if (reminders.isEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: isDarkLocal ? const Color(0xFF2D3139) : Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: (isDarkLocal ? Colors.white : Colors.black)
+                          .withOpacity(0.06),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.notifications_off_rounded,
+                        size: 18,
+                        color: Color(0xFFCDAF56),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'No reminders set for this task.',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: isDarkLocal ? Colors.white70 : Colors.black87,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                isDark: isDarkLocal,
-              ),
+              if (reminders.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: isDarkLocal ? const Color(0xFF2D3139) : Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: (isDarkLocal ? Colors.white : Colors.black)
+                          .withOpacity(0.06),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${reminders.length} active reminder${reminders.length == 1 ? '' : 's'}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: isDarkLocal ? Colors.white70 : Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      ...reminders.map(
+                        (reminder) => Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(top: 2),
+                                child: Icon(
+                                  Icons.circle,
+                                  size: 7,
+                                  color: Color(0xFFCDAF56),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  reminder.getDescription(),
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: isDarkLocal ? Colors.white70 : Colors.black87,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
             ],
           ),
         ),

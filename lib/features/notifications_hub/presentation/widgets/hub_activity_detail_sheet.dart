@@ -45,6 +45,8 @@ class HubActivityDetailSheet extends StatelessWidget {
         return 'Tapped Today';
       case NotificationLifecycleEvent.action:
         return 'Actions Today';
+      case NotificationLifecycleEvent.snoozed:
+        return 'Snoozed Today';
       default:
         return event.label;
     }
@@ -58,6 +60,8 @@ class HubActivityDetailSheet extends StatelessWidget {
         return Icons.touch_app_rounded;
       case NotificationLifecycleEvent.action:
         return Icons.bolt_rounded;
+      case NotificationLifecycleEvent.snoozed:
+        return Icons.snooze_rounded;
       default:
         return Icons.notifications_rounded;
     }
@@ -71,6 +75,8 @@ class HubActivityDetailSheet extends StatelessWidget {
         return Colors.green;
       case NotificationLifecycleEvent.action:
         return Colors.amber;
+      case NotificationLifecycleEvent.snoozed:
+        return Colors.deepPurple;
       default:
         return AppColorSchemes.primaryGold;
     }

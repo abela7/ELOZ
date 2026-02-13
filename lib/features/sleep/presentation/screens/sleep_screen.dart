@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../../core/constants/app_colors.dart';
-import '../../../../core/notifications/services/universal_notification_scheduler.dart';
 import '../../../../core/theme/dark_gradient.dart';
 import '../../data/models/sleep_record.dart';
 import '../../data/models/sleep_factor.dart';
@@ -34,9 +33,8 @@ class _SleepScreenState extends ConsumerState<SleepScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await UniversalNotificationScheduler().syncAll();
-    });
+    // No sync on open: main.dart already runs syncAll at startup. Redundant
+    // sync caused lag and duplicate scheduling when opening Sleep tab.
   }
 
   @override

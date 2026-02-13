@@ -157,29 +157,53 @@ class SleepDebtReportService {
   }
 
   /// All-time total debt. Uses records from inception to today.
+  /// Processes year-by-year to avoid loading years of data at once.
   Future<int> getAllTimeDebtMinutes({
     required double targetHours,
   }) async {
-    final start = DateTime(2020, 1, 1); // Reasonable early bound
-    final end = DateTime.now();
-    final daily = await getDailyBreakdown(
-      start: start,
-      end: end,
-      targetHours: targetHours,
-    );
-    return daily.fold<int>(0, (s, e) => s + e.debtMinutes);
+    var total = 0;
+    final endOfThisYear = DateTime.now();
+    var year = 2020; // Reasonable early bound
+
+    while (year <= endOfThisYear.year) {
+      final start = DateTime(year, 1, 1);
+      final end = year < endOfThisYear.year
+          ? DateTime(year, 12, 31)
+          : endOfThisYear;
+      final daily = await getDailyBreakdown(
+        start: start,
+        end: end,
+        targetHours: targetHours,
+      );
+      total += daily.fold<int>(0, (s, e) => s + e.debtMinutes);
+      year++;
+    }
+    return total;
   }
 
   /// All-time yearly breakdown for robust all-time report.
+  /// Processes year-by-year so each query handles ~365 days max.
   Future<List<YearlyDebtEntry>> getAllTimeYearlyBreakdown({
     required double targetHours,
   }) async {
-    final start = DateTime(2020, 1, 1);
-    final end = DateTime.now();
-    return getYearlyBreakdown(
-      start: start,
-      end: end,
-      targetHours: targetHours,
-    );
+    final entries = <YearlyDebtEntry>[];
+    final endOfThisYear = DateTime.now();
+    var year = 2020;
+
+    while (year <= endOfThisYear.year) {
+      final start = DateTime(year, 1, 1);
+      final end = year < endOfThisYear.year
+          ? DateTime(year, 12, 31)
+          : endOfThisYear;
+      final yearly = await getYearlyBreakdown(
+        start: start,
+        end: end,
+        targetHours: targetHours,
+      );
+      entries.addAll(yearly);
+      year++;
+    }
+    entries.sort((a, b) => a.year.compareTo(b.year));
+    return entries;
   }
 }

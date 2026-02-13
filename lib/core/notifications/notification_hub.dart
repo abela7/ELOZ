@@ -995,6 +995,7 @@ class NotificationHub {
     var scheduledToday = 0;
     var tappedToday = 0;
     var actionToday = 0;
+    var snoozedToday = 0;
     var cancelledToday = 0;
     var failedToday = 0;
 
@@ -1009,6 +1010,9 @@ class NotificationHub {
         case NotificationLifecycleEvent.action:
           actionToday++;
           break;
+        case NotificationLifecycleEvent.snoozed:
+          snoozedToday++;
+          break;
         case NotificationLifecycleEvent.cancelled:
           cancelledToday++;
           break;
@@ -1016,7 +1020,6 @@ class NotificationHub {
           failedToday++;
           break;
         case NotificationLifecycleEvent.delivered:
-        case NotificationLifecycleEvent.snoozed:
         case NotificationLifecycleEvent.missed:
           break;
       }
@@ -1029,6 +1032,7 @@ class NotificationHub {
       scheduledToday: scheduledToday,
       tappedToday: tappedToday,
       actionToday: actionToday,
+      snoozedToday: snoozedToday,
       cancelledToday: cancelledToday,
       failedToday: failedToday,
     );

@@ -11,9 +11,6 @@ import '../../../../core/models/recurrence_rule.dart';
 import '../../data/models/habit_category.dart';
 import '../../../../data/models/subtask.dart';
 import '../providers/habit_category_providers.dart';
-import '../../../../core/theme/color_schemes.dart';
-import '../../../../features/notifications_hub/presentation/widgets/universal_reminder_section.dart';
-import '../../notifications/habit_notification_creator_context.dart';
 import '../../data/models/habit.dart';
 import '../../data/models/habit_unit.dart';
 import '../../data/models/completion_type_config.dart';
@@ -64,7 +61,7 @@ class _CreateHabitScreenState extends ConsumerState<CreateHabitScreen> {
   // Reminder
   bool _reminderEnabled = false;
   TimeOfDay? _reminderTime = const TimeOfDay(hour: 9, minute: 0);
-  String _reminderDuration = 'At task time';
+  String _reminderDuration = 'At habit time';
 
   // Habit Time (specific time vs anytime)
   bool _hasSpecificTime = false;
@@ -175,7 +172,7 @@ class _CreateHabitScreenState extends ConsumerState<CreateHabitScreen> {
       _endDate = habit.endDate;
       _endOccurrences = habit.endOccurrences;
       _reminderEnabled = habit.reminderEnabled;
-      _reminderDuration = habit.reminderDuration ?? 'At task time';
+      _reminderDuration = habit.reminderDuration ?? 'At habit time';
       if (habit.reminderMinutes != null) {
         _reminderTime = TimeOfDay(
           hour: habit.reminderMinutes! ~/ 60,
@@ -2157,6 +2154,16 @@ class _CreateHabitScreenState extends ConsumerState<CreateHabitScreen> {
   }
 
   Widget _buildReminderSection(BuildContext context, bool isDark) {
+    final reminderOptions = <String>[
+      'At habit time',
+      '5 min before',
+      '15 min before',
+      '30 min before',
+      '1 hour before',
+      '1 day before',
+    ];
+    final selectedDuration = _normalizeReminderDuration(_reminderDuration);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2185,41 +2192,90 @@ class _CreateHabitScreenState extends ConsumerState<CreateHabitScreen> {
           ),
         if (_reminderEnabled) ...[
           const SizedBox(height: 16),
-          if (widget.habit != null)
-            UniversalReminderSection(
-              creatorContext: HabitNotificationCreatorContext.forHabit(
-                habitId: widget.habit!.id,
-                habitTitle: widget.habit!.title,
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF2D3139) : Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: (isDark ? Colors.white : Colors.black).withOpacity(0.06),
               ),
-              isDark: isDark,
-              onRemindersChanged: () => setState(() {}),
-            )
-          else
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF2D3139) : Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.notifications_rounded, size: 20, color: AppColorSchemes.primaryGold),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Add reminders after saving the habit',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: (isDark ? Colors.white : Colors.black).withOpacity(0.6),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'When should the reminder fire?',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white70 : Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  initialValue: reminderOptions.contains(selectedDuration)
+                      ? selectedDuration
+                      : reminderOptions.first,
+                  dropdownColor: isDark ? const Color(0xFF2D3139) : Colors.white,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                    filled: true,
+                    fillColor: isDark
+                        ? Colors.white.withOpacity(0.04)
+                        : Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: (isDark ? Colors.white : Colors.black)
+                            .withOpacity(0.08),
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: (isDark ? Colors.white : Colors.black)
+                            .withOpacity(0.08),
+                      ),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(
+                        color: Color(0xFFCDAF56),
                       ),
                     ),
                   ),
-                ],
-              ),
+                  items: reminderOptions
+                      .map(
+                        (option) => DropdownMenuItem<String>(
+                          value: option,
+                          child: Text(option),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _reminderDuration = value);
+                  },
+                ),
+              ],
             ),
+          ),
         ],
       ],
     );
+  }
+
+  String _normalizeReminderDuration(String rawDuration) {
+    final normalized = rawDuration.trim().toLowerCase();
+    if (normalized == 'at task time' || normalized == 'on time') {
+      return 'At habit time';
+    }
+    return rawDuration;
   }
 
   String _getStatusEmoji(String status) {

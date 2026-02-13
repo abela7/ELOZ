@@ -1,52 +1,48 @@
-import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 
-import '../../../../core/models/special_task_sound.dart';
-import '../../../../core/models/vibration_pattern.dart';
-import '../../../../core/notifications/models/hub_custom_notification_type.dart';
-import '../../../../core/notifications/models/hub_module_notification_settings.dart';
-import '../../../../core/notifications/models/hub_notification_section.dart';
-import '../../../../core/notifications/models/hub_notification_type.dart';
 import '../../../../core/notifications/notifications.dart';
-import '../../../../core/notifications/services/universal_notification_scheduler.dart';
-import '../../../../core/theme/color_schemes.dart';
+import '../../../../core/services/alarm_service.dart';
+import '../../../../core/notifications/services/notification_recovery_service.dart';
+import '../../../../core/services/notification_service.dart';
 import '../../../../core/widgets/settings_widgets.dart';
-import '../../../sleep/notifications/sleep_notification_contract.dart';
-import '../widgets/hub_robust_type_list.dart';
-import '../widgets/hub_sleep_scheduled_section.dart';
-import '../widgets/hub_sound_picker.dart';
-import '../widgets/hub_vibration_picker.dart';
+import '../../../../data/repositories/task_repository.dart';
+import '../../../habits/data/repositories/habit_repository.dart';
+import '../../../habits/presentation/screens/settings/habit_notification_settings_screen.dart';
+import '../widgets/hub_habit_scheduled_section.dart';
+import 'hub_orphaned_notifications_page.dart';
 
-/// Sleep Module Notification Management Page
+/// Habit Module Notification Management Page
 ///
-/// Same structure as Finance: Overview, Notification Types, Scheduled, Settings.
-class HubSleepModulePage extends StatefulWidget {
-  const HubSleepModulePage({super.key});
+/// Overview, Scheduled, and Settings for Habit Manager reminders.
+/// Aligns with Finance and Sleep module pages.
+class HubHabitModulePage extends StatefulWidget {
+  const HubHabitModulePage({super.key});
 
   @override
-  State<HubSleepModulePage> createState() => _HubSleepModulePageState();
+  State<HubHabitModulePage> createState() => _HubHabitModulePageState();
 }
 
-class _HubSleepModulePageState extends State<HubSleepModulePage>
+class _HubHabitModulePageState extends State<HubHabitModulePage>
     with SingleTickerProviderStateMixin {
   final NotificationHub _hub = NotificationHub();
   late TabController _tabController;
 
   HubModuleNotificationSettings? _settings;
-  List<HubNotificationType> _types = [];
-  Map<String, HubCustomNotificationType> _customTypesById = {};
-  List<HubNotificationSection> _sections = [];
   int _scheduledCount = 0;
+  int _orphanedCount = 0;
   bool _loading = true;
   int _scheduledRefreshKey = 0;
 
-  static const _sleepColor = Colors.indigo;
+  static const _habitColor = Colors.deepPurple;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _load();
   }
 
@@ -61,80 +57,62 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
 
     await _hub.initialize();
 
-    _settings =
-        await _hub.getModuleSettings(SleepNotificationContract.moduleId);
-    _types = _hub.typeRegistry
-        .typesForModule(SleepNotificationContract.moduleId)
-        .toList()
-      ..sort((a, b) => a.displayName.compareTo(b.displayName));
-    final customTypes = await _hub.customTypeStore
-        .getAllForModule(SleepNotificationContract.moduleId);
-    _customTypesById = {for (final t in customTypes) t.id: t};
-    final adapter = _hub.adapterFor(SleepNotificationContract.moduleId);
-    _sections = adapter?.sections ?? [];
+    _settings = await _hub.getModuleSettings(NotificationHubModuleIds.habit);
     _scheduledCount = await _hub.getScheduledCountForModule(
-      SleepNotificationContract.moduleId,
+      NotificationHubModuleIds.habit,
     );
+    _orphanedCount = await _countOrphanedNotifications('habit');
 
     if (mounted) setState(() => _loading = false);
   }
 
   Future<void> _saveSettings(HubModuleNotificationSettings settings) async {
-    await _hub.setModuleSettings(
-      SleepNotificationContract.moduleId,
-      settings,
-    );
+    await _hub.setModuleSettings(NotificationHubModuleIds.habit, settings);
     setState(() => _settings = settings);
   }
 
   Future<void> _syncNotifications() async {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Syncing in background...'),
-          backgroundColor: Colors.green,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
+    setState(() => _loading = true);
 
-    unawaited(
-      UniversalNotificationScheduler()
-          .syncAll()
-          .then((_) async {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Sleep reminders synced'),
-                  backgroundColor: Colors.green,
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-              await _load();
-            }
-          })
-          .catchError((e) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Sync failed: $e'),
-                  backgroundColor: Colors.red,
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-            }
-          }),
-    );
+    try {
+      final result = await NotificationRecoveryService.runRecovery(
+        bootstrapForBackground: false,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.success
+                  ? 'Synced: ${result.habitRescheduled} habit reminders rescheduled'
+                  : 'Sync failed: ${result.error}',
+            ),
+            backgroundColor: result.success ? Colors.green : Colors.red,
+          ),
+        );
+        await _load();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sync failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        setState(() => _loading = false);
+      }
+    }
   }
 
   Future<void> _clearAllScheduled() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Clear All Sleep Notifications?'),
+        title: const Text('Clear All Habit Notifications?'),
         content: const Text(
-          'This will cancel all scheduled sleep reminders. '
-          'You can re-sync them anytime.',
+          'This will cancel all scheduled habit reminders. '
+          'You can re-sync them from the Habit Manager or here.',
         ),
         actions: [
           TextButton(
@@ -149,26 +127,14 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
       ),
     );
 
-    if (confirmed == true) {
-      final list = await _hub.getScheduledNotificationsForModule(
-        SleepNotificationContract.moduleId,
+    if (confirmed == true && mounted) {
+      final count = await _hub.cancelForModule(
+        moduleId: NotificationHubModuleIds.habit,
       );
-      int cleared = 0;
-      for (final n in list) {
-        final id = n['id'];
-        if (id != null) {
-          await _hub.cancelByNotificationId(
-            notificationId: (id is int) ? id : (id as num).toInt(),
-            entityId: n['entityId'] as String?,
-            payload: n['payload'] as String?,
-          );
-          cleared++;
-        }
-      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Cleared $cleared notification(s)'),
+            content: Text('Cleared $count notification(s)'),
             backgroundColor: Colors.green,
           ),
         );
@@ -184,7 +150,7 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
     final isDark = theme.brightness == Brightness.dark;
 
     if (_loading || _settings == null) {
-      return Scaffold(
+      return const Scaffold(
         body: Center(child: CircularProgressIndicator.adaptive()),
       );
     }
@@ -207,19 +173,19 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: _sleepColor.withOpacity(0.15),
+                color: _habitColor.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: const Icon(
-                Icons.bedtime_rounded,
-                color: _sleepColor,
+                Icons.auto_awesome_rounded,
+                color: _habitColor,
                 size: 20,
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                'Sleep Notifications',
+                'Habit Notifications',
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 18,
@@ -253,13 +219,12 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
           controller: _tabController,
           isScrollable: true,
           tabAlignment: TabAlignment.start,
-          labelColor: AppColorSchemes.primaryGold,
+          labelColor: _habitColor,
           unselectedLabelColor: theme.colorScheme.onSurfaceVariant,
-          indicatorColor: AppColorSchemes.primaryGold,
+          indicatorColor: _habitColor,
           indicatorWeight: 3,
           tabs: const [
             Tab(text: 'Overview'),
-            Tab(text: 'Notification Types'),
             Tab(text: 'Scheduled'),
             Tab(text: 'Settings'),
           ],
@@ -269,7 +234,6 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
         controller: _tabController,
         children: [
           _buildOverviewTab(isDark),
-          _buildTypesTab(isDark),
           _buildScheduledTab(isDark),
           _buildSettingsTab(isDark),
         ],
@@ -281,6 +245,7 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        _buildOrphanWarning(isDark),
         Row(
           children: [
             Expanded(
@@ -288,43 +253,27 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
                 icon: Icons.notifications_active_rounded,
                 label: 'Scheduled',
                 value: _scheduledCount.toString(),
-                color: Colors.blue,
+                color: Colors.deepPurple,
                 isDark: isDark,
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: _buildStatCard(
-                icon: Icons.category_rounded,
-                label: 'Sections',
-                value: _sections.length.toString(),
-                color: Colors.green,
-                isDark: isDark,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _buildStatCard(
-                icon: Icons.tune_rounded,
-                label: 'Types',
-                value: _types.length.toString(),
-                color: Colors.orange,
-                isDark: isDark,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildStatCard(
-                icon: Icons.check_circle_rounded,
-                label: 'Status',
-                value: _settings?.notificationsEnabled ?? true ? 'Active' : 'Disabled',
-                color: _settings?.notificationsEnabled ?? true
-                    ? Colors.green
-                    : Colors.red,
+                icon: _orphanedCount > 0
+                    ? Icons.warning_amber_rounded
+                    : Icons.check_circle_rounded,
+                label: _orphanedCount > 0 ? 'Orphaned' : 'Status',
+                value: _orphanedCount > 0
+                    ? _orphanedCount.toString()
+                    : (_settings?.notificationsEnabled ?? true
+                        ? 'Active'
+                        : 'Disabled'),
+                color: _orphanedCount > 0
+                    ? Colors.orange
+                    : (_settings?.notificationsEnabled ?? true
+                        ? Colors.green
+                        : Colors.red),
                 isDark: isDark,
               ),
             ),
@@ -344,25 +293,57 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    color: Colors.blue.withOpacity(0.15),
+                    color: _habitColor.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Icon(
                     Icons.sync_rounded,
-                    color: Colors.blue,
+                    color: _habitColor,
                     size: 20,
                   ),
                 ),
                 title: const Text(
-                  'Sync All Notifications',
+                  'Sync All Habit Reminders',
                   style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
                 ),
                 subtitle: const Text(
-                  'Re-schedule all sleep reminders',
+                  'Re-schedule reminders for all habits',
                   style: TextStyle(fontSize: 12),
                 ),
                 trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
                 onTap: _syncNotifications,
+              ),
+              _buildDivider(isDark),
+              ListTile(
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _habitColor.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.auto_awesome_rounded,
+                    color: _habitColor,
+                    size: 20,
+                  ),
+                ),
+                title: const Text(
+                  'Open Habit Manager',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                ),
+                subtitle: const Text(
+                  'Add or edit habits and their reminders',
+                  style: TextStyle(fontSize: 12),
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  Navigator.of(context).pop();
+                  context.go('/habits');
+                },
               ),
               _buildDivider(isDark),
               ListTile(
@@ -386,7 +367,7 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
                   style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
                 ),
                 subtitle: const Text(
-                  'Cancel all pending sleep notifications',
+                  'Cancel all pending habit notifications',
                   style: TextStyle(fontSize: 12),
                 ),
                 trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
@@ -395,23 +376,40 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
             ],
           ),
         ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1A1D23) : Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withOpacity(0.08)
+                  : Colors.black.withOpacity(0.06),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.info_outline_rounded,
+                size: 20,
+                color: isDark ? Colors.white54 : Colors.black54,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Habit reminders are set per habit when creating or editing. '
+                  'Use Habit Manager to add reminders (e.g. "At habit time", "5 min before").',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.white54 : Colors.black54,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
-    );
-  }
-
-  Widget _buildTypesTab(bool isDark) {
-    return HubRobustTypeList(
-      hub: _hub,
-      moduleId: SleepNotificationContract.moduleId,
-      moduleDisplayName: 'Sleep',
-      settings: _settings ?? HubModuleNotificationSettings.empty,
-      types: _types,
-      customTypesById: _customTypesById,
-      sections: _sections,
-      isDark: isDark,
-      moduleColor: _sleepColor,
-      onSaveSettings: _saveSettings,
-      onReload: _load,
     );
   }
 
@@ -422,7 +420,7 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
         padding: const EdgeInsets.all(16),
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
-          SleepScheduledSection(
+          HabitScheduledSection(
             hub: _hub,
             isDark: isDark,
             refreshKey: _scheduledRefreshKey,
@@ -448,24 +446,24 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
                   _saveSettings(_settings!.copyWith(notificationsEnabled: val));
                 },
                 title: const Text(
-                  'Enable Sleep Notifications',
+                  'Enable Habit Notifications',
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
                 subtitle: Text(
                   _settings?.notificationsEnabled ?? true
-                      ? 'All sleep notifications are active'
-                      : 'Sleep notifications are disabled',
+                      ? 'All habit reminders are active'
+                      : 'Habit reminders are disabled',
                   style: const TextStyle(fontSize: 12),
                 ),
                 secondary: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: _sleepColor.withOpacity(0.15),
+                    color: _habitColor.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: const Icon(
                     Icons.notifications_active_rounded,
-                    color: _sleepColor,
+                    color: _habitColor,
                     size: 20,
                   ),
                 ),
@@ -474,94 +472,40 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
           ),
         ),
         const SizedBox(height: 20),
-
-        SettingsSection(
-          title: 'SOUND & FEEDBACK',
-          icon: Icons.volume_up_rounded,
-          child: Column(
-            children: [
-              ListTile(
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: Colors.purple.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(
-                    Icons.music_note_rounded,
-                    color: Colors.purple,
-                    size: 20,
-                  ),
-                ),
-                title: const Text(
-                  'Default Sound',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-                ),
-                subtitle: Text(
-                  _soundDisplayName(_settings?.defaultSound),
-                  style: const TextStyle(fontSize: 12),
-                ),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
-                onTap: () async {
-                  final currentSound = _settings?.defaultSound ?? '';
-                  final picked = await HubSoundPicker.show(
-                    context,
-                    currentSoundId: currentSound,
-                    title: 'Default Sound for Sleep',
-                  );
-                  if (picked != null) {
-                    _saveSettings(_settings!.copyWith(defaultSound: picked));
-                  }
-                },
-              ),
-              _buildDivider(isDark),
-              ListTile(
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(
-                    Icons.vibration_rounded,
-                    color: Colors.orange,
-                    size: 20,
-                  ),
-                ),
-                title: const Text(
-                  'Default Vibration',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-                ),
-                subtitle: Text(
-                  _vibrationDisplayName(_settings?.defaultVibrationPattern),
-                  style: const TextStyle(fontSize: 12),
-                ),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
-                onTap: () async {
-                  final currentPattern =
-                      _settings?.defaultVibrationPattern ?? '';
-                  final picked = await HubVibrationPicker.show(
-                    context,
-                    currentPatternId: currentPattern,
-                    title: 'Default Vibration for Sleep',
-                  );
-                  if (picked != null) {
-                    _saveSettings(_settings!
-                        .copyWith(defaultVibrationPattern: picked));
-                  }
-                },
-              ),
-            ],
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          leading: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: _habitColor.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.settings_rounded,
+              color: _habitColor,
+              size: 20,
+            ),
           ),
+          title: const Text(
+            'Habit Notification Settings',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+          ),
+          subtitle: const Text(
+            'Sounds, special reminders, diagnostics',
+            style: TextStyle(fontSize: 12),
+          ),
+          trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+          onTap: () {
+            HapticFeedback.lightImpact();
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const HabitNotificationSettingsScreen(),
+              ),
+            );
+          },
         ),
         const SizedBox(height: 24),
-
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
@@ -569,14 +513,10 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
               final confirmed = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  title: const Text('Reset All Settings?'),
+                  title: const Text('Reset Habit Notification Settings?'),
                   content: const Text(
-                    'This will reset all Sleep notification settings to defaults:\n\n'
-                    '• Enable notifications: ON\n'
-                    '• Default sound: System default\n'
-                    '• Default vibration: Default\n'
-                    '• All per-type overrides: cleared\n\n'
-                    'This cannot be undone.',
+                    'This will reset Habit notification settings in the Hub to defaults. '
+                    'Reminders will stay scheduled; only Hub-level overrides are cleared.',
                   ),
                   actions: [
                     TextButton(
@@ -586,7 +526,7 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
                     TextButton(
                       onPressed: () => Navigator.pop(ctx, true),
                       style: TextButton.styleFrom(foregroundColor: Colors.red),
-                      child: const Text('Reset All'),
+                      child: const Text('Reset'),
                     ),
                   ],
                 ),
@@ -597,7 +537,7 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('All settings reset to defaults'),
+                      content: Text('Settings reset to defaults'),
                       backgroundColor: Colors.green,
                     ),
                   );
@@ -610,7 +550,7 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
               color: Colors.red,
             ),
             label: const Text(
-              'Reset All Settings',
+              'Reset Hub Settings',
               style: TextStyle(color: Colors.red),
             ),
             style: OutlinedButton.styleFrom(
@@ -689,16 +629,112 @@ class _HubSleepModulePageState extends State<HubSleepModulePage>
     );
   }
 
-  String _soundDisplayName(String? soundId) {
-    if (soundId == null || soundId.isEmpty) return 'Default for all types';
-    if (soundId == 'silent') return 'Silent';
-    if (soundId == 'default') return 'System Default';
-    if (soundId.startsWith('content://')) return soundId;
-    return SpecialTaskSound.getDisplayName(soundId);
+  /// Counts pending notifications whose parent entity no longer exists.
+  /// Includes native alarms (AlarmBootReceiver) - Android has no API to list
+  /// AlarmManager alarms; we read our own persistence.
+  Future<int> _countOrphanedNotifications(String type) async {
+    try {
+      final habitRepo = HabitRepository();
+      final taskRepo = TaskRepository();
+
+      final habitIds =
+          (await habitRepo.getAllHabits(includeArchived: true))
+              .map((h) => h.id)
+              .toSet();
+      final taskIds =
+          (await taskRepo.getAllTasks()).map((t) => t.id).toSet();
+
+      var count = 0;
+
+      final all =
+          await NotificationService().getDetailedPendingNotifications();
+      count += all.where((info) {
+        if (info.entityId.isEmpty) return false;
+        if (info.type != type) return false;
+        if (info.type == 'habit') return !habitIds.contains(info.entityId);
+        if (info.type == 'task') return !taskIds.contains(info.entityId);
+        return false;
+      }).length;
+
+      if (Platform.isAndroid) {
+        final native = await AlarmService().getScheduledAlarmsFromNative();
+        for (final alarm in native) {
+          final payload = alarm['payload'] as String? ?? '';
+          final parts = payload.split('|');
+          if (parts.length < 2 || parts[0] != type) continue;
+          final entityId = parts[1];
+          if (entityId.isEmpty) continue;
+          final isOrphan = type == 'habit'
+              ? !habitIds.contains(entityId)
+              : !taskIds.contains(entityId);
+          if (isOrphan) count++;
+        }
+      }
+
+      return count;
+    } catch (_) {
+      return 0;
+    }
   }
 
-  String _vibrationDisplayName(String? patternId) {
-    if (patternId == null || patternId.isEmpty) return 'Default for all types';
-    return VibrationPattern.getDisplayName(patternId);
+  Widget _buildOrphanWarning(bool isDark) {
+    if (_orphanedCount == 0) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () async {
+          await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) =>
+                  const HubOrphanedNotificationsPage(filterType: 'habit'),
+            ),
+          );
+          _load(); // Refresh counts after returning
+        },
+        child: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded,
+                color: Colors.orange, size: 24),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$_orphanedCount orphaned notification${_orphanedCount == 1 ? '' : 's'}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Notifications for deleted habits still pending',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? Colors.white60 : Colors.black54,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 16,
+              color: isDark ? Colors.white38 : Colors.black38,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

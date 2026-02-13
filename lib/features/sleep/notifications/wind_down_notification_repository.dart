@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/notifications/models/universal_notification.dart';
@@ -92,15 +93,18 @@ class WindDownNotificationRepository extends UniversalNotificationRepository {
       moduleId: template.moduleId,
       section: template.section,
     );
-    for (final e in existing) {
+    final scheduler = UniversalNotificationScheduler();
+    await Future.wait(existing.map((e) async {
+      await scheduler.cancelForNotification(e);
       await _delegate.delete(e.id);
-    }
+    }));
 
     for (final n in toSave) {
       await _delegate.save(n);
     }
 
-    await UniversalNotificationScheduler().syncAll();
+    // Sync to OS in background – don't block the UI (Notification Hub's job)
+    unawaited(UniversalNotificationScheduler().syncAll());
   }
 
   @override
@@ -110,6 +114,7 @@ class WindDownNotificationRepository extends UniversalNotificationRepository {
 
   /// Re-syncs existing wind-down notifications with the current schedule.
   /// Call when the user changes bedtime or reminder offset in Wind-Down settings.
+  /// Rebuilds all per-day notifications with correct hour/minute from the schedule.
   Future<void> resyncFromSchedule() async {
     await _delegate.init();
 
@@ -120,13 +125,10 @@ class WindDownNotificationRepository extends UniversalNotificationRepository {
     if (existing.isEmpty) return;
 
     final offset = await _scheduleService.getReminderOffsetMinutes();
-    final template = existing.first;
-    final notification = template.copyWith(
+    final template = existing.first.copyWith(
       timingValue: offset,
       timingUnit: 'minutes',
-      hour: 22,
-      minute: 0,
     );
-    await _saveWindDownExpanded(notification);
+    await _saveWindDownExpanded(template);
   }
 }

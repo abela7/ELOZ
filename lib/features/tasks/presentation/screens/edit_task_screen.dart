@@ -17,8 +17,6 @@ import '../providers/task_type_providers.dart';
 import '../providers/tag_providers.dart';
 import '../../../../core/widgets/icon_picker_widget.dart';
 import '../widgets/enhanced_recurrence_selector.dart';
-import '../../../../features/notifications_hub/presentation/widgets/universal_reminder_section.dart';
-import '../../notifications/task_notification_creator_context.dart';
 import '../../../../core/models/recurrence_rule.dart';
 
 /// Edit Task Screen - Mirrors Add Task Screen exactly
@@ -131,6 +129,8 @@ class _EditTaskScreenState extends ConsumerState<EditTaskScreen> {
           // Legacy stored string -> parse using ReminderManager for migration.
           notifier.setReminders(ReminderManager().parseReminderString(raw));
         }
+      } else {
+        notifier.setReminders(const []);
       }
     });
   }
@@ -300,6 +300,10 @@ class _EditTaskScreenState extends ConsumerState<EditTaskScreen> {
       }
     }
 
+    final remindersJson = formState.reminders.isEmpty
+        ? null
+        : Reminder.encodeList(formState.reminders);
+
     // Create updated task with all fields
     final updatedTask = widget.task.copyWith(
       title: _titleController.text.trim(),
@@ -315,7 +319,7 @@ class _EditTaskScreenState extends ConsumerState<EditTaskScreen> {
           ? null
           : _subtasks.map((title) => Subtask(title: title)).toList(),
       recurrence: _selectedRecurrence,
-      remindersJson: widget.task.remindersJson,
+      remindersJson: remindersJson,
       notes: _notesController.text.trim().isEmpty
           ? null
           : _notesController.text.trim(),
@@ -2371,7 +2375,24 @@ class _EditTaskScreenState extends ConsumerState<EditTaskScreen> {
 
   Widget _buildReminderAccordion(BuildContext context, bool isDark, AddTaskFormState formState) {
     final settings = ref.watch(notificationSettingsProvider);
-    const reminderLabel = 'Reminders';
+    final hasReminder = formState.reminders.isNotEmpty;
+    final reminderLabel = hasReminder
+        ? (formState.reminders.length == 1
+            ? formState.reminders.first.getDescription()
+            : '${formState.reminders.length} reminders')
+        : 'Set reminders';
+    final reminderPresets = <Map<String, dynamic>>[
+      {'label': '5 min before', 'reminder': Reminder.fiveMinutesBefore()},
+      {'label': '15 min before', 'reminder': Reminder.fifteenMinutesBefore()},
+      {'label': '30 min before', 'reminder': Reminder.thirtyMinutesBefore()},
+      {'label': '1 hour before', 'reminder': Reminder.oneHourBefore()},
+      {'label': '1 day before', 'reminder': Reminder.oneDayBefore()},
+      {'label': 'At task time', 'reminder': Reminder.atTaskTime()},
+      {'label': '5 min after', 'reminder': Reminder.fiveMinutesAfter()},
+      {'label': '15 min after', 'reminder': Reminder.fifteenMinutesAfter()},
+      {'label': '30 min after', 'reminder': Reminder.thirtyMinutesAfter()},
+      {'label': '1 hour after', 'reminder': Reminder.oneHourAfter()},
+    ];
     final dueDateTime = DateTime(
       _selectedDate.year,
       _selectedDate.month,
@@ -2404,9 +2425,11 @@ class _EditTaskScreenState extends ConsumerState<EditTaskScreen> {
             child: Row(
               children: [
                 Icon(
-                  _showReminder ? Icons.notifications_active_rounded : Icons.notifications_outlined,
+                  hasReminder
+                      ? Icons.notifications_active_rounded
+                      : Icons.notifications_outlined,
                   size: 18,
-                  color: _showReminder
+                  color: hasReminder
                       ? const Color(0xFFCDAF56)
                       : (isDark ? Colors.white54 : Colors.black45),
                 ),
@@ -2416,11 +2439,29 @@ class _EditTaskScreenState extends ConsumerState<EditTaskScreen> {
                     reminderLabel,
                     style: TextStyle(
                       fontSize: 13,
-                      color: (isDark ? Colors.white70 : Colors.black87),
+                      color: hasReminder
+                          ? (isDark ? Colors.white70 : Colors.black87)
+                          : (isDark ? Colors.white38 : Colors.black38),
                     ),
                   ),
                 ),
-                AnimatedRotation(
+                if (hasReminder)
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      ref.read(addTaskFormProvider.notifier).setReminders(const []);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 16,
+                        color: isDark ? Colors.white38 : Colors.black38,
+                      ),
+                    ),
+                  ),
+                if (!hasReminder)
+                  AnimatedRotation(
                     turns: _showReminder ? 0.5 : 0,
                     duration: const Duration(milliseconds: 200),
                     child: Icon(
@@ -2440,13 +2481,138 @@ class _EditTaskScreenState extends ConsumerState<EditTaskScreen> {
             padding: const EdgeInsets.only(top: 8),
             child: Column(
               children: [
-                UniversalReminderSection(
-                  creatorContext: TaskNotificationCreatorContext.forTask(
-                    taskId: widget.task.id,
-                    taskTitle: widget.task.title,
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF2D3139) : Theme.of(context).colorScheme.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: (isDark ? Colors.white : Colors.black).withOpacity(0.06),
+                    ),
                   ),
-                  isDark: isDark,
-                  onRemindersChanged: () => setState(() {}),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'When should this task remind you?',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white70 : Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Pick as many as you need (before, at, or after task time)',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isDark ? Colors.white54 : Colors.black54,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: reminderPresets.map((preset) {
+                          final reminder = preset['reminder'] as Reminder;
+                          final isSelected = _isReminderSelected(formState, reminder);
+                          return GestureDetector(
+                            onTap: () {
+                              HapticFeedback.selectionClick();
+                              _toggleReminderPreset(formState, reminder);
+                            },
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 150),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? const Color(0xFFCDAF56).withOpacity(0.16)
+                                    : (isDark ? Colors.white.withOpacity(0.04) : Colors.white),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: isSelected
+                                      ? const Color(0xFFCDAF56)
+                                      : (isDark ? Colors.white12 : Colors.grey.shade300),
+                                ),
+                              ),
+                              child: Text(
+                                preset['label'] as String,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: isSelected
+                                      ? FontWeight.w600
+                                      : FontWeight.w500,
+                                  color: isSelected
+                                      ? const Color(0xFFCDAF56)
+                                      : (isDark ? Colors.white70 : Colors.grey.shade700),
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                      if (formState.reminders.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          'Active reminders',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? Colors.white54 : Colors.black54,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: formState.reminders.map((reminder) {
+                            return GestureDetector(
+                              onTap: () {
+                                HapticFeedback.selectionClick();
+                                _removeReminder(formState, reminder);
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 7,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? Colors.white.withOpacity(0.06)
+                                      : Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: (isDark ? Colors.white : Colors.black)
+                                        .withOpacity(0.08),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      reminder.getDescription(),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: isDark ? Colors.white70 : Colors.black87,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Icon(
+                                      Icons.close_rounded,
+                                      size: 14,
+                                      color: isDark ? Colors.white54 : Colors.black45,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
                 if (isBlockedByQuietHours && !_dismissedQuietHoursNote) ...[
                   const SizedBox(height: 10),
@@ -2462,6 +2628,33 @@ class _EditTaskScreenState extends ConsumerState<EditTaskScreen> {
     );
   }
 
+  bool _isReminderSelected(AddTaskFormState formState, Reminder reminder) {
+    return formState.reminders.any(
+      (existing) => existing.fingerprint == reminder.fingerprint,
+    );
+  }
+
+  void _toggleReminderPreset(AddTaskFormState formState, Reminder reminder) {
+    final reminders = List<Reminder>.from(formState.reminders);
+    final index = reminders.indexWhere(
+      (existing) => existing.fingerprint == reminder.fingerprint,
+    );
+    if (index >= 0) {
+      reminders.removeAt(index);
+    } else {
+      reminders.add(reminder);
+    }
+    ref.read(addTaskFormProvider.notifier).setReminders(reminders);
+  }
+
+  void _removeReminder(AddTaskFormState formState, Reminder reminder) {
+    final reminders = List<Reminder>.from(formState.reminders);
+    reminders.removeWhere(
+      (existing) => existing.fingerprint == reminder.fingerprint,
+    );
+    ref.read(addTaskFormProvider.notifier).setReminders(reminders);
+  }
+
   bool _isQuietHoursBlocked(
     NotificationSettings settings,
     AddTaskFormState formState,
@@ -2469,7 +2662,14 @@ class _EditTaskScreenState extends ConsumerState<EditTaskScreen> {
   ) {
     if (!formState.isSpecial) return false;
     if (!settings.quietHoursEnabled || settings.allowUrgentDuringQuietHours) return false;
-    // Quiet hours check skipped when using UniversalReminderSection (reminders in universal storage).
+    if (formState.reminders.isEmpty) return false;
+
+    for (final reminder in formState.reminders) {
+      if (!reminder.enabled) continue;
+      final reminderTime = reminder.calculateReminderTime(dueDateTime);
+      if (reminderTime == null) continue;
+      if (settings.isInQuietHoursAt(reminderTime)) return true;
+    }
     return false;
   }
 
@@ -2479,8 +2679,9 @@ class _EditTaskScreenState extends ConsumerState<EditTaskScreen> {
     AddTaskFormState formState,
     DateTime dueDateTime,
   ) {
+    final remindersKey = formState.reminders.map((r) => r.fingerprint).join(',');
     final daysKey = settings.quietHoursDays.join(',');
-    return '${dueDateTime.millisecondsSinceEpoch}|${formState.isSpecial}|'
+    return '${dueDateTime.millisecondsSinceEpoch}|$remindersKey|${formState.isSpecial}|'
         '${settings.quietHoursEnabled}|${settings.allowUrgentDuringQuietHours}|'
         '${settings.quietHoursStart}-${settings.quietHoursEnd}|$daysKey';
   }

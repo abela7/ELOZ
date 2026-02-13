@@ -106,6 +106,37 @@ class AlarmBootReceiver : BroadcastReceiver() {
             prefs.edit().remove(KEY_ALARMS).apply()
             Log.d(TAG, "Cleared all saved alarms")
         }
+
+        /**
+         * Get all scheduled alarms for Flutter (e.g. orphan detection).
+         * Returns List<Map> with id, triggerTime, title, body, payload, oneShot, etc.
+         * Android AlarmManager has no API to list alarms; this reads our own persistence.
+         */
+        fun getScheduledAlarms(context: Context): List<Map<String, Any?>> {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val alarmsJson = prefs.getString(KEY_ALARMS, "[]") ?: "[]"
+            val alarms = org.json.JSONArray(alarmsJson)
+            val result = mutableListOf<Map<String, Any?>>()
+            val currentTime = System.currentTimeMillis()
+            for (i in 0 until alarms.length()) {
+                try {
+                    val alarm = alarms.getJSONObject(i)
+                    val triggerTime = alarm.getLong("triggerTime")
+                    if (triggerTime <= currentTime) continue
+                    result.add(mapOf(
+                        "id" to alarm.getInt("id"),
+                        "triggerTime" to triggerTime,
+                        "title" to alarm.getString("title"),
+                        "body" to alarm.optString("body", ""),
+                        "payload" to alarm.optString("payload", ""),
+                        "oneShot" to alarm.optBoolean("oneShot", false),
+                    ))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error parsing alarm: ${e.message}")
+                }
+            }
+            return result
+        }
     }
     
     override fun onReceive(context: Context, intent: Intent) {

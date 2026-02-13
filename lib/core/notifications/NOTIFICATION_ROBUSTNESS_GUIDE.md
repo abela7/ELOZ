@@ -101,6 +101,15 @@ Manufacturers (Xiaomi, Huawei, OnePlus, Samsung, OPPO, etc.) apply battery optim
 
 5. **OEM user guidance (Layer 5):** Hub Global Settings shows a "Reliability" section with guidance and "Open Battery Settings" for Android.
 
+6. **Orphan prevention (Layer 6):**
+   - **Android has no API to list AlarmManager alarms.** Apps must track their own alarms.
+   - Native alarms use two storages: Flutter `tracked_native_alarms` and native `scheduled_alarms` (AlarmBootReceiver). Boot restore updates only the latter.
+   - **On delete:** `ReminderManager.cancelRemindersForHabit` / `handleTaskDeleted` now also call `AlarmService.cancelAlarmsForEntity(type, entityId)` to scan native storage and cancel by payload (e.g. `habit|id|...`).
+   - **On startup:** `NotificationRecoveryService.pruneOrphanedAlarms()` runs to cancel any native alarms whose entity (task/habit) no longer exists.
+   - **In recovery:** Before resync, `_pruneOrphanedAlarms()` is called when running with app context.
+   - **Orphaned Notifications page:** Hub shows all orphans (plugin + tracked + native) with Cancel/Cancel All.
+   - **Future mini-apps:** Any entity with reminders must cancel via ReminderManager (or equivalent) on delete/archive, including `AlarmService().cancelAlarmsForEntity()` for native alarms. Payload format must be `type|entityId|...` (e.g. `habit|abc123|at_time|...`) for entity-based cancellation to work.
+
 ### Optional Future Enhancements
 
 1. **Extend alarmClock to more sections** (bills, debts)  

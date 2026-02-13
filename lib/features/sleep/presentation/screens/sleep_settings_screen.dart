@@ -4,10 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/notifications/models/notification_hub_modules.dart';
 import '../../../../core/notifications/notification_hub.dart';
 import '../../../../core/notifications/services/universal_notification_repository.dart';
-import '../../../../core/notifications/services/universal_notification_scheduler.dart';
 import '../../../../core/theme/dark_gradient.dart';
-import '../../../../features/notifications_hub/presentation/widgets/universal_reminder_section.dart';
-import '../../notifications/sleep_notification_creator_context.dart';
 import '../providers/sleep_providers.dart';
 import 'manage_sleep_factors_screen.dart';
 import 'sleep_target_screen.dart';
@@ -25,9 +22,6 @@ class SleepSettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SleepSettingsScreenState extends ConsumerState<SleepSettingsScreen> {
-  bool _enableReminders = true;
-  int _bedtimeReminderMinutes = 30;
-  int _wakeUpReminderMinutes = 10;
   bool _isLoading = true;
 
   @override
@@ -37,38 +31,7 @@ class _SleepSettingsScreenState extends ConsumerState<SleepSettingsScreen> {
   }
 
   Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _enableReminders = prefs.getBool('sleep_enable_reminders') ?? true;
-      _bedtimeReminderMinutes = prefs.getInt('sleep_bedtime_reminder_minutes') ?? 30;
-      _wakeUpReminderMinutes = prefs.getInt('sleep_wakeup_reminder_minutes') ?? 10;
-      _isLoading = false;
-    });
-  }
-
-  Future<void> _saveReminderSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('sleep_enable_reminders', _enableReminders);
-    await prefs.setInt('sleep_bedtime_reminder_minutes', _bedtimeReminderMinutes);
-    await prefs.setInt('sleep_wakeup_reminder_minutes', _wakeUpReminderMinutes);
-
-    final hub = NotificationHub();
-    await hub.initialize();
-    if (_enableReminders) {
-      await UniversalNotificationScheduler().syncAll();
-    } else {
-      await ref.read(sleepReminderServiceProvider).cancelTrackedReminders();
-      await hub.cancelForModule(moduleId: 'sleep_reminder');
-    }
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Reminder settings saved'),
-          backgroundColor: Color(0xFFCDAF56),
-        ),
-      );
-    }
+    if (mounted) setState(() => _isLoading = false);
   }
 
   @override
@@ -154,32 +117,8 @@ class _SleepSettingsScreenState extends ConsumerState<SleepSettingsScreen> {
                 _buildSettingCard(
                   context,
                   isDark,
-                  title: 'Enable Reminders',
-                  subtitle: _enableReminders ? 'Reminders are enabled' : 'Reminders are disabled',
-                  icon: Icons.notifications_active_rounded,
-                  trailing: Switch(
-                    value: _enableReminders,
-                    onChanged: (value) {
-                      setState(() {
-                        _enableReminders = value;
-                      });
-                      _saveReminderSettings();
-                    },
-                    activeColor: const Color(0xFFCDAF56),
-                  ),
-                  onTap: () {
-                    setState(() {
-                      _enableReminders = !_enableReminders;
-                    });
-                    _saveReminderSettings();
-                  },
-                ),
-                const SizedBox(height: 16),
-                _buildSettingCard(
-                  context,
-                  isDark,
                   title: 'Wind-Down Reminders',
-                  subtitle: 'Set bedtime per day, get notified 30min/1hr before',
+                  subtitle: 'Set bedtime per day, get notified before sleep',
                   icon: Icons.bedtime_rounded,
                   trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
                   onTap: () => Navigator.of(context).push(
@@ -187,30 +126,6 @@ class _SleepSettingsScreenState extends ConsumerState<SleepSettingsScreen> {
                       builder: (context) => const WindDownSettingsScreen(),
                     ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                UniversalReminderSection(
-                  creatorContext: SleepNotificationCreatorContext.forBedtime(
-                    goalId: 'sleep_bedtime',
-                    goalName: 'Bedtime',
-                  ),
-                  isDark: isDark,
-                  title: 'Bedtime Reminders',
-                  onRemindersChanged: () {
-                    UniversalNotificationScheduler().syncAll();
-                  },
-                ),
-                const SizedBox(height: 16),
-                UniversalReminderSection(
-                  creatorContext: SleepNotificationCreatorContext.forWakeUp(
-                    goalId: 'sleep_wakeup',
-                    goalName: 'Wake Up',
-                  ),
-                  isDark: isDark,
-                  title: 'Wake Up Reminders',
-                  onRemindersChanged: () {
-                    UniversalNotificationScheduler().syncAll();
-                  },
                 ),
 
                 const SizedBox(height: 32),
@@ -433,12 +348,10 @@ class _SleepSettingsScreenState extends ConsumerState<SleepSettingsScreen> {
                 final hub = NotificationHub();
                 await hub.initialize();
 
-                // 1. Delete all sleep records
+                // 1. Delete all sleep records (batch delete avoids loading all into memory)
                 final recordRepository = ref.read(sleepRecordRepositoryProvider);
-                final allRecords = await recordRepository.getAll();
-                for (final record in allRecords) {
-                  await recordRepository.delete(record.id);
-                }
+                final ids = await recordRepository.getAllIds();
+                await recordRepository.deleteBatch(ids);
 
                 // 2. Reset factors and templates to defaults
                 await ref.read(sleepFactorRepositoryProvider).resetToDefaults();

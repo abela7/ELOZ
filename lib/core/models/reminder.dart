@@ -103,6 +103,26 @@ class Reminder {
     );
   }
 
+  /// 5 minutes after
+  factory Reminder.fiveMinutesAfter() {
+    return Reminder(type: 'after', value: 5, unit: 'minutes');
+  }
+
+  /// 15 minutes after
+  factory Reminder.fifteenMinutesAfter() {
+    return Reminder(type: 'after', value: 15, unit: 'minutes');
+  }
+
+  /// 30 minutes after
+  factory Reminder.thirtyMinutesAfter() {
+    return Reminder(type: 'after', value: 30, unit: 'minutes');
+  }
+
+  /// 1 hour after
+  factory Reminder.oneHourAfter() {
+    return Reminder(type: 'after', value: 1, unit: 'hours');
+  }
+
   /// Custom reminder with specific date/time
   factory Reminder.custom(DateTime dateTime) {
     return Reminder(

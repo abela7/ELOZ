@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
@@ -604,27 +607,40 @@ class NotificationService {
   }
 
   /// Request notification permissions
+  ///
+  /// Wrapped in try-catch: on Android the plugin may throw
+  /// NullPointerException if context is null (e.g. during early init,
+  /// hot reload, or when running from a headless engine).
   Future<void> _requestPermissions() async {
-    // Android 13+ permissions
-    await _notificationsPlugin
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >()
-        ?.requestNotificationsPermission();
+    try {
+      // Android 13+ permissions
+      await _notificationsPlugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.requestNotificationsPermission();
 
-    // Request full screen intent permission for Android 14+
-    await _notificationsPlugin
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >()
-        ?.requestExactAlarmsPermission();
+      // Request full screen intent permission for Android 14+
+      await _notificationsPlugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.requestExactAlarmsPermission();
 
-    // iOS permissions
-    await _notificationsPlugin
-        .resolvePlatformSpecificImplementation<
-          IOSFlutterLocalNotificationsPlugin
-        >()
-        ?.requestPermissions(alert: true, badge: true, sound: true);
+      // iOS permissions
+      await _notificationsPlugin
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >()
+          ?.requestPermissions(alert: true, badge: true, sound: true);
+    } on PlatformException catch (e) {
+      // Context may be null during early init or headless engine (WorkManager)
+      if (kDebugMode) {
+        debugPrint(
+          '🔔 NotificationService: Permission request skipped (context unavailable): ${e.message}',
+        );
+      }
+    }
   }
 
   /// Create notification channels for Android
@@ -1817,6 +1833,13 @@ class NotificationService {
     }
     await _clearTrackedSpecialAlarmIds(taskId);
 
+    // Inform the Hub that all task reminders were cancelled.
+    unawaited(NotificationActivityLogger().logCancelled(
+      moduleId: 'task',
+      entityId: taskId,
+      metadata: <String, dynamic>{'cancelledCount': cancelled},
+    ));
+
     print(
       '🔔 NotificationService: Cancelled $cancelled pending reminders for task $taskId',
     );
@@ -1863,6 +1886,13 @@ class NotificationService {
       await AlarmService().cancelAlarm(alarmId);
     }
     await _clearTrackedSpecialAlarmIds(habitId);
+
+    // Inform the Hub that all habit reminders were cancelled.
+    unawaited(NotificationActivityLogger().logCancelled(
+      moduleId: 'habit',
+      entityId: habitId,
+      metadata: <String, dynamic>{'cancelledCount': cancelled},
+    ));
 
     print(
       '🔔 NotificationService: Cancelled $cancelled pending reminders for habit $habitId',
@@ -4436,6 +4466,18 @@ class NotificationService {
       } catch (_) {
         // Best-effort cleanup.
       }
+    }
+
+    // Inform the Hub about the single-notification cancellation.
+    if (entityId != null && entityId.isNotEmpty) {
+      unawaited(NotificationActivityLogger().logCancelled(
+        moduleId: 'unknown', // caller may not know; entityId is best-effort
+        entityId: entityId,
+        metadata: <String, dynamic>{
+          'notificationId': notificationId,
+          'source': 'cancel_by_id',
+        },
+      ));
     }
 
     print(

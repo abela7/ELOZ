@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -213,29 +214,15 @@ class _UniversalNotificationCreatorSheetState
       if (repo != null) {
         await repo.init();
         await repo.save(notification);
-        final scheduleResult =
-            await UniversalNotificationScheduler().syncForEntity(notification.entityId);
-
         if (mounted) {
-          if (scheduleResult.success) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('Reminder saved and scheduled'),
-                backgroundColor: Colors.green.shade700,
-              ),
-            );
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Saved but could not schedule: ${scheduleResult.failureReason ?? "unknown"}',
-                ),
-                backgroundColor: Colors.orange.shade800,
-                duration: const Duration(seconds: 5),
-              ),
-            );
-          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Reminder saved. Scheduling in background.'),
+              backgroundColor: Colors.green.shade700,
+            ),
+          );
         }
+        unawaited(UniversalNotificationScheduler().syncForEntity(notification.entityId));
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Reminder saved (no repository)')),

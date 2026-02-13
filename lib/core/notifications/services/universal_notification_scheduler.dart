@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../data/repositories/task_repository.dart';
 import '../../../features/finance/data/models/bill.dart';
@@ -6,6 +7,7 @@ import '../../../features/finance/data/repositories/bill_repository.dart';
 import '../../../features/finance/data/repositories/debt_repository.dart';
 import '../../../features/finance/data/repositories/recurring_income_repository.dart';
 import '../../../features/habits/data/repositories/habit_repository.dart';
+import '../../../features/sleep/data/services/wind_down_schedule_service.dart';
 import '../models/notification_hub_schedule_request.dart';
 import '../models/notification_hub_schedule_result.dart';
 import '../models/universal_notification.dart';
@@ -92,6 +94,35 @@ class UniversalNotificationScheduler {
 
   /// Returns null if skipped (no due, past, empty title); otherwise hub result.
   Future<NotificationHubScheduleResult?> _scheduleOne(UniversalNotification n) async {
+    // Respect module/section enabled state – don't schedule when disabled.
+    if (n.moduleId == 'sleep') {
+      if (n.section == 'winddown') {
+        final enabled = await WindDownScheduleService().getEnabled();
+        if (!enabled) {
+          await _cancelForNotification(n);
+          if (kDebugMode) {
+            debugPrint(
+              'UniversalNotificationScheduler: wind-down disabled – cancel and skip ${n.entityId}',
+            );
+          }
+          return null;
+        }
+      } else if (n.section == 'bedtime' || n.section == 'wakeup') {
+        final prefs = await SharedPreferences.getInstance();
+        final remindersEnabled =
+            prefs.getBool('sleep_enable_reminders') ?? true;
+        if (!remindersEnabled) {
+          await _cancelForNotification(n);
+          if (kDebugMode) {
+            debugPrint(
+              'UniversalNotificationScheduler: sleep reminders disabled – cancel and skip ${n.entityId}',
+            );
+          }
+          return null;
+        }
+      }
+    }
+
     final due = await _getDueDateForEntity(n.moduleId, n.section, n.entityId, n);
     if (due == null) {
       // Entity may have been deleted/completed; proactively cancel any stale
@@ -263,7 +294,21 @@ class UniversalNotificationScheduler {
     if (section == 'winddown') {
       final weekday = _weekdayFromWindDownEntityId(entityId);
       if (weekday == null) return null;
-      return _nextOccurrenceOfWeekday(today, weekday);
+      // Wind-down: Mon–Sun week. Include creation day when it matches the
+      // weekday (e.g. add on Fri → schedule Fri today). Only advance to next
+      // week when the reminder time has already passed.
+      var due = _nextOccurrenceOfWeekday(today, weekday);
+      var scheduledAt = _computeScheduledAt(n, due);
+      const maxWeeks = 8;
+      var weeksChecked = 0;
+      while (
+          scheduledAt.isBefore(now.subtract(const Duration(minutes: 1))) &&
+          weeksChecked < maxWeeks) {
+        due = due.add(const Duration(days: 7));
+        scheduledAt = _computeScheduledAt(n, due);
+        weeksChecked++;
+      }
+      return weeksChecked < maxWeeks ? due : null;
     }
 
     final targetToday = DateTime(

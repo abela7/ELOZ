@@ -103,8 +103,8 @@ Future<void> _runPostStartupInitialization() async {
     if (cancelled > 0 && kDebugMode) {
       debugPrint('Migrated: cancelled $cancelled legacy sleep_reminder notifications');
     }
-    // Sync universal reminders to OS scheduler (includes resync if timezone changed)
-    await UniversalNotificationScheduler().syncAll();
+    // Sync universal reminders to OS scheduler (background – don't block startup)
+    unawaited(UniversalNotificationScheduler().syncAll());
 
     // If timezone changed, run full recovery (Finance + Universal)
     if (pendingResync) {
@@ -115,6 +115,9 @@ Future<void> _runPostStartupInitialization() async {
         debugPrint('NotificationHub: resynced after timezone/time change');
       }
     }
+
+    // Prune orphaned alarms (deleted entities; native storage has no entity check)
+    unawaited(NotificationRecoveryService.pruneOrphanedAlarms());
 
     // nek12 Layer 4: health check – if we expect notifications but OS has 0, resync
     unawaited(NotificationRecoveryService.runHealthCheckIfNeeded());

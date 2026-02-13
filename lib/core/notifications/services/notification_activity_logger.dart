@@ -56,4 +56,71 @@ class NotificationActivityLogger {
       ),
     );
   }
+
+  /// Log a cancelled event (e.g. when legacy reminders are bulk-cancelled
+  /// for a task/habit via [NotificationService]).
+  Future<void> logCancelled({
+    required String moduleId,
+    required String entityId,
+    Map<String, dynamic> metadata = const <String, dynamic>{},
+  }) async {
+    await _logStore.append(
+      NotificationLogEntry.create(
+        moduleId: moduleId,
+        entityId: entityId,
+        event: NotificationLifecycleEvent.cancelled,
+        metadata: {
+          'source': 'legacy_cancel',
+          ...metadata,
+        },
+      ),
+    );
+  }
+
+  /// Log a snoozed event (e.g. when user snoozes a task/habit notification
+  /// via the legacy [NotificationHandler] path).
+  Future<void> logSnoozed({
+    required String moduleId,
+    required String entityId,
+    String title = '',
+    String body = '',
+    String? payload,
+    int? snoozeDurationMinutes,
+  }) async {
+    await _logStore.append(
+      NotificationLogEntry.create(
+        moduleId: moduleId,
+        entityId: entityId,
+        title: title,
+        body: body,
+        payload: payload,
+        event: NotificationLifecycleEvent.snoozed,
+        metadata: <String, dynamic>{
+          if (snoozeDurationMinutes != null)
+            'snoozeDurationMinutes': snoozeDurationMinutes,
+        },
+      ),
+    );
+  }
+
+  /// Log an action event (e.g. when user taps mark_done / skip on a legacy
+  /// task/habit notification).
+  Future<void> logAction({
+    required String moduleId,
+    required String entityId,
+    required String actionId,
+    String title = '',
+    String? payload,
+  }) async {
+    await _logStore.append(
+      NotificationLogEntry.create(
+        moduleId: moduleId,
+        entityId: entityId,
+        title: title,
+        payload: payload,
+        actionId: actionId,
+        event: NotificationLifecycleEvent.action,
+      ),
+    );
+  }
 }

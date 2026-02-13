@@ -11,6 +11,15 @@ import '../../../../core/notifications/notifications.dart';
 /// Bottom sheet showing advanced details for a history log entry with
 /// "Go to source" and "Delete reminder from source" actions.
 class HubHistoryEntryDetailSheet extends StatelessWidget {
+  static String _formatSnoozeDuration(dynamic minutes) {
+    final m = minutes is int
+        ? minutes
+        : (minutes is num ? minutes.toInt() : int.tryParse('$minutes') ?? 0);
+    if (m < 60) return '$m min';
+    final h = m ~/ 60;
+    final r = m % 60;
+    return r == 0 ? '$h hr' : '$h hr $r min';
+  }
   final NotificationLogEntry entry;
   final NotificationHub hub;
   final bool isDark;
@@ -221,6 +230,20 @@ class HubHistoryEntryDetailSheet extends StatelessWidget {
                           isDark: isDark,
                           monospace: true,
                         ),
+                    ],
+                  ),
+                if (entry.event == NotificationLifecycleEvent.snoozed &&
+                    entry.metadata['snoozeDurationMinutes'] != null)
+                  _DetailSection(
+                    title: 'Snooze',
+                    isDark: isDark,
+                    children: [
+                      _DetailRow(
+                        label: 'Duration',
+                        value: _formatSnoozeDuration(
+                            entry.metadata['snoozeDurationMinutes']),
+                        isDark: isDark,
+                      ),
                     ],
                   ),
                 _DetailSection(

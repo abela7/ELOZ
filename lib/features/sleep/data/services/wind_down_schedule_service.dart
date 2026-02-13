@@ -14,6 +14,13 @@ class WindDownScheduleService {
   /// Preset reminder offsets in minutes (15, 30, 45, 60, 90, 120).
   static List<int> get reminderOffsetPresets => List.unmodifiable(_defaultOffsetMinutes);
 
+  /// Min/max custom offset in minutes (5 min to 4 hours).
+  static const int minCustomOffsetMinutes = 5;
+  static const int maxCustomOffsetMinutes = 240;
+
+  /// Whether [minutes] is one of the presets.
+  static bool isPreset(int minutes) => _defaultOffsetMinutes.contains(minutes);
+
   Future<bool> getEnabled() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_enabledKey) ?? false;

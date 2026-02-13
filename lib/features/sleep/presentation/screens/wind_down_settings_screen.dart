@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -68,6 +69,15 @@ class _WindDownSettingsScreenState extends ConsumerState<WindDownSettingsScreen>
     }
   }
 
+  /// Persists current state to the schedule service (prefs only).
+  /// Call before Add/Edit reminder so the repo sees correct data.
+  Future<void> _persistScheduleToService() async {
+    final service = ref.read(windDownScheduleServiceProvider);
+    await service.setEnabled(_enabled);
+    await service.setReminderOffsetMinutes(_reminderOffsetMinutes);
+    await service.saveFullSchedule(Map.from(_bedtimes));
+  }
+
   Future<void> _save() async {
     if (_isSaving) return;
     setState(() => _isSaving = true);
@@ -81,13 +91,17 @@ class _WindDownSettingsScreenState extends ConsumerState<WindDownSettingsScreen>
     final repo = WindDownNotificationRepository();
     await repo.init();
     if (_enabled) {
-      await repo.resyncFromSchedule();
+      unawaited(repo.resyncFromSchedule().then((_) {
+        if (mounted) setState(() {});
+      }));
     } else {
+      // Await cancel+delete so they complete before user navigates to Hub.
       final existing = await repo.getAll(moduleId: 'sleep', section: 'winddown');
       for (final n in existing) {
         await UniversalNotificationScheduler().cancelForNotification(n);
         await repo.delete(n.id);
       }
+      if (mounted) setState(() {});
     }
 
     if (mounted) {
@@ -120,13 +134,11 @@ class _WindDownSettingsScreenState extends ConsumerState<WindDownSettingsScreen>
     );
     if (picked != null && mounted) {
       setState(() => _bedtimes[weekday] = picked);
-      await _save();
     }
   }
 
   void _clearDay(int weekday) {
     setState(() => _bedtimes[weekday] = null);
-    _save();
   }
 
   @override
@@ -149,6 +161,20 @@ class _WindDownSettingsScreenState extends ConsumerState<WindDownSettingsScreen>
           icon: const Icon(Icons.arrow_back_rounded),
           onPressed: () => Navigator.of(context).pop(),
         ),
+        actions: [
+          TextButton.icon(
+            onPressed: _isSaving ? null : () => _save(),
+            icon: _isSaving
+                ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.check_rounded, size: 18),
+            label: Text(_isSaving ? 'Saving...' : 'Save'),
+            style: TextButton.styleFrom(foregroundColor: AppColors.gold),
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -295,10 +321,7 @@ class _WindDownSettingsScreenState extends ConsumerState<WindDownSettingsScreen>
           ),
           Switch(
             value: _enabled,
-            onChanged: (v) {
-              setState(() => _enabled = v);
-              _save();
-            },
+            onChanged: (v) => setState(() => _enabled = v),
             activeColor: AppColors.gold,
           ),
         ],
@@ -306,8 +329,100 @@ class _WindDownSettingsScreenState extends ConsumerState<WindDownSettingsScreen>
     );
   }
 
+  String _formatMinutesLabel(int mins) {
+    if (mins >= 60) {
+      final h = mins ~/ 60;
+      final m = mins % 60;
+      return m > 0 ? '${h}h ${m}m' : '${h}h';
+    }
+    return '${mins}m';
+  }
+
+  Future<void> _showCustomOffsetDialog(bool isDark) async {
+    final controller = TextEditingController(
+      text: WindDownScheduleService.isPreset(_reminderOffsetMinutes)
+          ? ''
+          : '$_reminderOffsetMinutes',
+    );
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: Theme.of(context).colorScheme.copyWith(
+                  primary: AppColors.gold,
+                ),
+          ),
+          child: AlertDialog(
+            title: const Text('Custom reminder time'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Minutes before bedtime (${WindDownScheduleService.minCustomOffsetMinutes}–${WindDownScheduleService.maxCustomOffsetMinutes})',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: isDark ? Colors.white54 : Colors.black54,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  keyboardType: TextInputType.number,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    hintText: 'e.g. 75',
+                    border: OutlineInputBorder(),
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                  ],
+                  onSubmitted: (v) {
+                    final raw = int.tryParse(v);
+                    if (raw != null) {
+                      final clamped = raw.clamp(
+                        WindDownScheduleService.minCustomOffsetMinutes,
+                        WindDownScheduleService.maxCustomOffsetMinutes,
+                      );
+                      Navigator.pop(ctx, clamped);
+                    }
+                  },
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final raw = int.tryParse(controller.text);
+                  if (raw != null) {
+                    final clamped = raw.clamp(
+                      WindDownScheduleService.minCustomOffsetMinutes,
+                      WindDownScheduleService.maxCustomOffsetMinutes,
+                    );
+                    Navigator.pop(ctx, clamped);
+                  }
+                },
+                style: FilledButton.styleFrom(backgroundColor: AppColors.gold),
+                child: const Text('Set'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (result != null && mounted) {
+      setState(() => _reminderOffsetMinutes = result);
+    }
+  }
+
   Widget _buildReminderOffsetCard(bool isDark) {
     final presets = WindDownScheduleService.reminderOffsetPresets;
+    final isCustom = !WindDownScheduleService.isPreset(_reminderOffsetMinutes);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -320,46 +435,68 @@ class _WindDownSettingsScreenState extends ConsumerState<WindDownSettingsScreen>
             color: isDark ? Colors.white70 : Colors.black87,
           ),
         ),
+        const SizedBox(height: 8),
+        Text(
+          'Tap Save above to apply changes.',
+          style: TextStyle(
+            fontSize: 12,
+            color: isDark ? Colors.white38 : Colors.black38,
+          ),
+        ),
         const SizedBox(height: 12),
         Wrap(
           spacing: 8,
           runSpacing: 8,
-          children: presets.map((mins) {
-            final isSelected = _reminderOffsetMinutes == mins;
-            final label = mins >= 60
-                ? '${mins ~/ 60}h'
-                : '${mins}m';
-            return GestureDetector(
+          children: [
+            ...presets.map((mins) {
+              final isSelected = !isCustom && _reminderOffsetMinutes == mins;
+              final label = _formatMinutesLabel(mins);
+              return GestureDetector(
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  setState(() => _reminderOffsetMinutes = mins);
+                },
+                child: _buildOffsetChip(isDark, label, isSelected),
+              );
+            }),
+            GestureDetector(
               onTap: () {
-                setState(() => _reminderOffsetMinutes = mins);
-                _save();
                 HapticFeedback.lightImpact();
+                _showCustomOffsetDialog(isDark);
               },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? AppColors.goldOpacity03
-                      : (isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04)),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: isSelected ? AppColors.gold : Colors.transparent,
-                    width: 1.5,
-                  ),
-                ),
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                    color: isSelected ? AppColors.gold : (isDark ? Colors.white70 : Colors.black54),
-                  ),
-                ),
+              child: _buildOffsetChip(
+                isDark,
+                isCustom ? _formatMinutesLabel(_reminderOffsetMinutes) : 'Custom',
+                isCustom,
               ),
-            );
-          }).toList(),
+            ),
+          ],
         ),
       ],
+    );
+  }
+
+  Widget _buildOffsetChip(bool isDark, String label, bool isSelected) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: isSelected
+            ? AppColors.goldOpacity03
+            : (isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04)),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isSelected ? AppColors.gold : Colors.transparent,
+          width: 1.5,
+        ),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+          color: isSelected ? AppColors.gold : (isDark ? Colors.white70 : Colors.black54),
+        ),
+      ),
     );
   }
 
@@ -568,6 +705,7 @@ class _WindDownSettingsScreenState extends ConsumerState<WindDownSettingsScreen>
                         return;
                       }
                       HapticFeedback.selectionClick();
+                      await _persistScheduleToService();
                       await UniversalNotificationCreatorSheet.show(
                         context,
                         creatorContext: SleepNotificationCreatorContext.forWindDown(
@@ -613,6 +751,7 @@ class _WindDownSettingsScreenState extends ConsumerState<WindDownSettingsScreen>
           Expanded(
             child: InkWell(
               onTap: () async {
+                await _persistScheduleToService();
                 await UniversalNotificationCreatorSheet.show(
                   context,
                   creatorContext: SleepNotificationCreatorContext.forWindDown(
@@ -688,11 +827,11 @@ class _WindDownSettingsScreenState extends ConsumerState<WindDownSettingsScreen>
               if (confirmed == true && mounted) {
                 final all =
                     await repo.getAll(moduleId: 'sleep', section: 'winddown');
-                for (final x in all) {
+                await Future.wait(all.map((x) async {
                   await UniversalNotificationScheduler().cancelForNotification(x);
                   await repo.delete(x.id);
-                }
-                setState(() {});
+                }));
+                if (mounted) setState(() {});
               }
             },
           ),

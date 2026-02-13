@@ -438,6 +438,16 @@ class NotificationHandler {
         channelKeyOverride: habitSettings?.defaultChannel,
       );
 
+      // Inform the Hub about the snooze so it appears in the history log.
+      unawaited(NotificationActivityLogger().logSnoozed(
+        moduleId: type, // 'task' or 'habit'
+        entityId: id,
+        title: title,
+        body: body,
+        payload: payload,
+        snoozeDurationMinutes: snoozeDuration,
+      ));
+
       debugPrint('⏰ NotificationHandler: Snoozed for $snoozeDuration minutes');
     } catch (e, stack) {
       debugPrint('⚠️ NotificationHandler: Error snoozing: $e');

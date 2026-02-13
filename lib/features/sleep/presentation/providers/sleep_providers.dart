@@ -10,7 +10,6 @@ import '../../data/models/sleep_debt_consistency.dart';
 import '../../data/repositories/sleep_record_repository.dart';
 import '../../data/services/sleep_debt_consistency_service.dart';
 import '../../data/services/sleep_debt_report_service.dart';
-import '../../data/models/sleep_debt_report.dart';
 import '../../data/services/sleep_correlation_service.dart';
 import '../../data/models/sleep_correlation_insight.dart';
 import '../../data/repositories/sleep_factor_repository.dart';
@@ -238,14 +237,15 @@ final sleepTagsProvider = FutureProvider<List<String>>((ref) async {
 // Statistics Providers
 // ============================================================================
 
-/// Provider for overall sleep statistics
+/// Provider for overall sleep statistics (last 365 days for performance).
+/// Scoped to avoid loading years of data; sufficient for dashboard metrics.
 final overallSleepStatisticsProvider =
     FutureProvider<SleepStatistics>((ref) async {
   final repository = ref.watch(sleepRecordRepositoryProvider);
   final service = ref.watch(sleepStatisticsServiceProvider);
   final targetService = ref.watch(sleepTargetServiceProvider);
 
-  final records = await repository.getAll();
+  final records = await repository.getLastNDays(365);
   final settings = await targetService.getSettings();
 
   return service.calculateStatistics(records, targetHours: settings.targetHours);

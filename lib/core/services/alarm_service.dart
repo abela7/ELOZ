@@ -279,6 +279,49 @@ class AlarmService {
     return true;
   }
 
+  /// Cancel all native alarms whose payload matches the given entity.
+  /// Use when deleting a habit/task to clear alarms in AlarmBootReceiver
+  /// storage (Android has no API to list AlarmManager alarms; we must
+  /// cancel by scanning our own persistence).
+  Future<int> cancelAlarmsForEntity(String type, String entityId) async {
+    if (entityId.isEmpty) return 0;
+    try {
+      final alarms = await getScheduledAlarmsFromNative();
+      var cancelled = 0;
+      final prefix = '$type|$entityId|';
+      for (final alarm in alarms) {
+        final payload = alarm['payload'] as String? ?? '';
+        if (payload.startsWith(prefix) || payload == '$type|$entityId') {
+          final id = (alarm['id'] as num?)?.toInt();
+          if (id != null) {
+            await cancelAlarm(id);
+            cancelled++;
+          }
+        }
+      }
+      return cancelled;
+    } catch (e) {
+      print('⚠️ AlarmService: Error cancelling alarms for $type/$entityId: $e');
+      return 0;
+    }
+  }
+
+  /// Get alarms scheduled in native storage (for reboot restoration).
+  /// Android AlarmManager has no public API to list alarms; we read our own
+  /// persistence. Use this for orphan detection (alarms for deleted entities).
+  Future<List<Map<String, dynamic>>> getScheduledAlarmsFromNative() async {
+    try {
+      final result = await _channel.invokeMethod<List<dynamic>>('getScheduledAlarms');
+      if (result == null) return [];
+      return result
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    } catch (e) {
+      print('⚠️ AlarmService: Error getting scheduled alarms: $e');
+      return [];
+    }
+  }
+
   /// Cancel a specific alarm
   Future<bool> cancelAlarm(int id) async {
     try {

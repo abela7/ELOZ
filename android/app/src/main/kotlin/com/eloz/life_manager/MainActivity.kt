@@ -351,6 +351,14 @@ class MainActivity : FlutterFragmentActivity() {
                         result.error("CANCEL_ERROR", e.message, null)
                     }
                 }
+                "getScheduledAlarms" -> {
+                    try {
+                        val alarms = AlarmBootReceiver.getScheduledAlarms(this)
+                        result.success(alarms)
+                    } catch (e: Exception) {
+                        result.error("GET_ALARMS_ERROR", e.message, null)
+                    }
+                }
                 "stopAlarm" -> {
                     try {
                         AlarmPlayerService.stop(this)

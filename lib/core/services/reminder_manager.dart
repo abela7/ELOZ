@@ -7,6 +7,7 @@ import '../notifications/services/universal_notification_repository.dart';
 import '../../data/models/task.dart';
 import '../../features/habits/data/models/habit.dart';
 import '../../features/habits/services/habit_reminder_service.dart';
+import 'alarm_service.dart';
 import 'notification_service.dart';
 
 /// Reminder Manager - Central coordinator for task reminders
@@ -186,6 +187,7 @@ class ReminderManager {
   /// Cancel reminders for a habit
   Future<void> cancelRemindersForHabit(String habitId) async {
     await _habitReminderService.cancelHabitReminders(habitId);
+    await _cancelNativeAlarmsForEntity('habit', habitId);
   }
 
   /// Cancel reminders for all habits
@@ -264,6 +266,14 @@ class ReminderManager {
     await cancelRemindersForTask(taskId);
     await _cancelHubRemindersForTask(taskId);
     await _deleteUniversalTaskDefinitions(taskId);
+    await _cancelNativeAlarmsForEntity('task', taskId);
+  }
+
+  /// Cancel native alarms for an entity (habit/task).
+  /// Android AlarmManager has no API to list alarms; we scan our own
+  /// AlarmBootReceiver persistence and cancel by payload match.
+  Future<void> _cancelNativeAlarmsForEntity(String type, String entityId) async {
+    await AlarmService().cancelAlarmsForEntity(type, entityId);
   }
 
   /// Get reminder descriptions for UI display

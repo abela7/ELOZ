@@ -160,6 +160,13 @@ class SleepRecordRepository {
     return getByDateRange(startDate, endDate);
   }
 
+  /// Get all record IDs without loading full objects.
+  /// Use for batch operations (e.g. reset) to avoid deserializing years of data.
+  Future<List<String>> getAllIds() async {
+    final box = await _getBox();
+    return box.keys.cast<String>().toList();
+  }
+
   /// Get total count
   Future<int> getCount() async {
     final box = await _getBox();

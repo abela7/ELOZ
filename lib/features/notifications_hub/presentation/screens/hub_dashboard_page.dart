@@ -8,9 +8,11 @@ import '../../../../core/widgets/settings_widgets.dart';
 import '../../../finance/notifications/finance_notification_contract.dart';
 import '../../../sleep/notifications/sleep_notification_contract.dart';
 import 'hub_finance_module_page.dart';
+import 'hub_habit_module_page.dart';
 import 'hub_module_detail_page.dart';
 import 'hub_failed_notifications_page.dart';
 import 'hub_sleep_module_page.dart';
+import 'hub_task_module_page.dart';
 import 'hub_unified_notifications_page.dart';
 import '../widgets/hub_activity_detail_sheet.dart';
 
@@ -224,8 +226,10 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                 icon: Icons.bar_chart_rounded,
                 child: Padding(
                   padding: const EdgeInsets.all(12),
-                  child: Row(
-                    children: [
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
                       _StatChip(
                         label: 'Scheduled',
                         value: summary.totalPending,
@@ -279,6 +283,23 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                       ),
                       const SizedBox(width: 8),
                       _StatChip(
+                        label: 'Snoozed',
+                        value: summary.snoozedToday,
+                        icon: Icons.snooze_rounded,
+                        color: Colors.deepPurple,
+                        onTap: summary.snoozedToday > 0
+                            ? () async {
+                                HapticFeedback.lightImpact();
+                                await HubActivityDetailSheet.show(
+                                  context,
+                                  event: NotificationLifecycleEvent.snoozed,
+                                );
+                                if (mounted) _refresh();
+                              }
+                            : null,
+                      ),
+                      const SizedBox(width: 8),
+                      _StatChip(
                         label: 'Failed',
                         value: summary.failedToday,
                         icon: Icons.error_outline_rounded,
@@ -295,7 +316,8 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                           });
                         },
                       ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -353,10 +375,18 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                                                         SleepNotificationContract
                                                             .moduleId
                                                     ? const HubSleepModulePage()
-                                                    : HubModuleDetailPage(
-                                                        moduleId:
-                                                            module.moduleId,
-                                                      ),
+                                                    : module.moduleId ==
+                                                            NotificationHubModuleIds
+                                                                .task
+                                                        ? const HubTaskModulePage()
+                                                        : module.moduleId ==
+                                                                NotificationHubModuleIds
+                                                                    .habit
+                                                            ? const HubHabitModulePage()
+                                                            : HubModuleDetailPage(
+                                                                moduleId:
+                                                                    module.moduleId,
+                                                              ),
                                       ),
                                     );
                                   },

@@ -8,6 +8,7 @@ import 'hub_clear_history_page.dart';
 import 'hub_dashboard_page.dart';
 import 'hub_global_settings_page.dart';
 import 'hub_history_page.dart';
+import 'hub_orphaned_notifications_page.dart';
 import 'hub_permissions_page.dart';
 import 'hub_quiet_hours_page.dart';
 
@@ -181,6 +182,17 @@ class _SettingsTab extends StatelessWidget {
             context,
             'Quiet Hours',
             const HubQuietHoursPage(),
+          ),
+        ),
+        _SettingsNavCard(
+          icon: Icons.link_off_rounded,
+          title: 'Orphaned Notifications',
+          subtitle: 'Find & cancel notifications for deleted items',
+          color: Colors.orange,
+          onTap: () => onPush(
+            context,
+            'Orphaned Notifications',
+            const HubOrphanedNotificationsPage(),
           ),
         ),
         _SettingsNavCard(
