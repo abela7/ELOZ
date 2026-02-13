@@ -229,6 +229,7 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                   child: SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                       _StatChip(
                         label: 'Scheduled',
@@ -1086,6 +1087,9 @@ class _StatChip extends StatelessWidget {
                 ),
               )
             : chip;
-    return Expanded(child: content);
+    // Do NOT use Expanded: chips live in a horizontal SingleChildScrollView
+    // where the Row has unbounded width; Expanded would cause parentDataDirty
+    // semantics assertion.
+    return content;
   }
 }
