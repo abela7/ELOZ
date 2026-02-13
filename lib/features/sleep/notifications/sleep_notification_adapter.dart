@@ -42,6 +42,12 @@ class SleepNotificationAdapter implements MiniAppNotificationAdapter {
           iconCodePoint: Icons.bedtime_rounded.codePoint,
           colorValue: Colors.indigo.shade700.toARGB32(),
         ),
+        HubNotificationSection(
+          id: SleepNotificationContract.sectionLowSleep,
+          displayName: 'Low Sleep',
+          iconCodePoint: Icons.warning_amber_rounded.codePoint,
+          colorValue: Colors.orange.toARGB32(),
+        ),
       ];
 
   @override
@@ -109,6 +115,15 @@ class SleepNotificationAdapter implements MiniAppNotificationAdapter {
     String entityId,
     String section,
   ) async {
+    if (section == SleepNotificationContract.sectionLowSleep) {
+      return {
+        '{goalName}': '7 hours',
+        '{bedtime}': '10:00 PM',
+        '{wakeTime}': '6:00 AM',
+        '{duration}': '6.0h',
+      };
+    }
+
     final targetService = SleepTargetService();
     final settings = await targetService.getSettings();
     final targetHours = settings.targetHours;

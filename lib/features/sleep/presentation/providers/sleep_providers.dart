@@ -21,6 +21,7 @@ import '../../data/services/sleep_weekly_report_service.dart';
 import '../../data/services/sleep_reminder_service.dart';
 import '../../data/services/sleep_target_service.dart';
 import '../../data/services/wind_down_schedule_service.dart';
+import '../../data/services/low_sleep_reminder_service.dart';
 
 // ============================================================================
 // Repository Providers
@@ -80,6 +81,22 @@ final sleepTargetServiceProvider = Provider<SleepTargetService>((ref) {
 /// Wind-down schedule service (bedtime per day + reminder offset).
 final windDownScheduleServiceProvider = Provider<WindDownScheduleService>((ref) {
   return WindDownScheduleService();
+});
+
+/// Low-sleep reminder: notify when sleep < threshold (user-configurable).
+final lowSleepReminderServiceProvider = Provider<LowSleepReminderService>((ref) {
+  return LowSleepReminderService();
+});
+
+/// Low-sleep reminder settings (enabled + threshold) for UI binding.
+final lowSleepReminderSettingsProvider =
+    FutureProvider<({bool enabled, double threshold, double hoursAfterWake})>((ref) async {
+  final service = ref.watch(lowSleepReminderServiceProvider);
+  return (
+    enabled: await service.isEnabled(),
+    threshold: await service.getThresholdHours(),
+    hoursAfterWake: await service.getHoursAfterWake(),
+  );
 });
 
 /// Sleep target settings (target hours + dangerous/poor/healthy thresholds).

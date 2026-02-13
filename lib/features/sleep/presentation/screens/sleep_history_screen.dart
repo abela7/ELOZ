@@ -1963,6 +1963,9 @@ class _SleepHistoryScreenState extends ConsumerState<SleepHistoryScreen> {
                           await ref
                               .read(sleepRecordRepositoryProvider)
                               .create(newRecord);
+                          await ref
+                              .read(lowSleepReminderServiceProvider)
+                              .checkAndSchedule(newRecord);
                         } else {
                           await ref
                               .read(sleepRecordRepositoryProvider)
