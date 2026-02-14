@@ -46,8 +46,8 @@ class Budget extends HiveObject {
   @HiveField(10, defaultValue: 0.0)
   double currentSpent; // Current spending against this budget
 
-  @HiveField(11, defaultValue: true)
-  bool alertEnabled; // Whether to alert when approaching/exceeding limit
+  @HiveField(11, defaultValue: false)
+  bool alertEnabled; // Whether to alert when approaching/exceeding limit (opt-in)
 
   @HiveField(12, defaultValue: 80.0)
   double alertThreshold; // Percentage at which to alert (e.g., 80 = alert at 80%)
@@ -106,7 +106,7 @@ class Budget extends HiveObject {
     this.isActive = true,
     DateTime? createdAt,
     this.currentSpent = 0.0,
-    this.alertEnabled = true,
+    this.alertEnabled = false,
     this.alertThreshold = 80.0,
     this.carryOver = false,
     this.excludedCategoryIds,

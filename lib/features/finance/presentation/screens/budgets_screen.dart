@@ -2421,7 +2421,7 @@ class _BudgetEditorSheetState extends ConsumerState<_BudgetEditorSheet> {
   late DateTime _startDate;
   DateTime? _endDate;
   bool _active = true;
-  bool _alertEnabled = true;
+  bool _alertEnabled = false;
   double _alertThreshold = 80;
 
   DateTime _normalize(DateTime date) =>
@@ -2466,7 +2466,7 @@ class _BudgetEditorSheetState extends ConsumerState<_BudgetEditorSheet> {
     );
     _endDate = _requiresDateEnd ? source?.endDate : null;
     _active = source?.isActive ?? true;
-    _alertEnabled = source?.alertEnabled ?? true;
+    _alertEnabled = source?.alertEnabled ?? false;
     _alertThreshold = source?.alertThreshold ?? 80;
   }
 

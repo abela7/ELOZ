@@ -28,7 +28,7 @@ class BudgetAdapter extends TypeAdapter<Budget> {
       isActive: fields[8] == null ? true : fields[8] as bool,
       createdAt: fields[9] as DateTime?,
       currentSpent: fields[10] == null ? 0.0 : fields[10] as double,
-      alertEnabled: fields[11] == null ? true : fields[11] as bool,
+      alertEnabled: fields[11] == null ? false : fields[11] as bool,
       alertThreshold: fields[12] == null ? 80.0 : fields[12] as double,
       carryOver: fields[13] == null ? false : fields[13] as bool,
       excludedCategoryIds: (fields[14] as List?)?.cast<String>(),

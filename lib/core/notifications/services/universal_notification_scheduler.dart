@@ -7,8 +7,6 @@ import '../../../features/finance/data/repositories/bill_repository.dart';
 import '../../../features/finance/data/repositories/debt_repository.dart';
 import '../../../features/finance/data/repositories/recurring_income_repository.dart';
 import '../../../features/habits/data/repositories/habit_repository.dart';
-import '../../../features/sleep/data/repositories/sleep_record_repository.dart';
-import '../../../features/sleep/data/services/low_sleep_reminder_service.dart';
 import '../../../features/sleep/data/services/wind_down_schedule_service.dart';
 import '../models/notification_hub_schedule_request.dart';
 import '../models/notification_hub_schedule_result.dart';
@@ -109,17 +107,6 @@ class UniversalNotificationScheduler {
           }
           return null;
         }
-      } else if (n.section == 'lowsleep') {
-        final enabled = await LowSleepReminderService().isEnabled();
-        if (!enabled) {
-          await _cancelForNotification(n);
-          if (kDebugMode) {
-            debugPrint(
-              'UniversalNotificationScheduler: low-sleep disabled – cancel and skip ${n.entityId}',
-            );
-          }
-          return null;
-        }
       } else if (n.section == 'bedtime' || n.section == 'wakeup') {
         final prefs = await SharedPreferences.getInstance();
         final remindersEnabled =
@@ -147,10 +134,7 @@ class UniversalNotificationScheduler {
       return _noDueDateResult;
     }
 
-    final scheduledAt =
-        (n.moduleId == 'sleep' && n.section == 'lowsleep')
-            ? due
-            : _computeScheduledAt(n, due);
+    final scheduledAt = _computeScheduledAt(n, due);
     if (scheduledAt.isBefore(
         DateTime.now().subtract(const Duration(seconds: 10)))) {
       if (kDebugMode) {
@@ -304,29 +288,6 @@ class UniversalNotificationScheduler {
   ) async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-
-    if (section == 'lowsleep') {
-      final service = LowSleepReminderService();
-      if (!await service.isEnabled()) return null;
-
-      final threshold = await service.getThresholdHours();
-      final hoursAfterWake = await service.getHoursAfterWake();
-
-      final recordRepo = SleepRecordRepository();
-      final latest = await recordRepo.getLatest();
-      if (latest == null || latest.isNap) return null;
-      if (latest.actualSleepHours >= threshold) return null;
-
-      await service.setLastScheduledSleepHours(latest.actualSleepHours);
-
-      final scheduled = latest.wakeTime.add(
-        Duration(
-          hours: hoursAfterWake.floor(),
-          minutes: ((hoursAfterWake % 1) * 60).round(),
-        ),
-      );
-      return scheduled;
-    }
 
     if (section == 'winddown') {
       final weekday = _weekdayFromWindDownEntityId(entityId);
