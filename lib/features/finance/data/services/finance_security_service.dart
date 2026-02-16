@@ -128,8 +128,12 @@ class FinanceSecurityService {
   // =========================================================================
 
   Future<bool> hasPasscode() async {
-    final hash = await _secureStorage.read(key: _passcodeHashKey);
-    final salt = await _secureStorage.read(key: _passcodeSaltKey);
+    final results = await Future.wait([
+      _secureStorage.read(key: _passcodeHashKey),
+      _secureStorage.read(key: _passcodeSaltKey),
+    ]);
+    final hash = results[0];
+    final salt = results[1];
     return hash != null && hash.isNotEmpty && salt != null && salt.isNotEmpty;
   }
 
@@ -188,9 +192,14 @@ class FinanceSecurityService {
   // =========================================================================
 
   Future<bool> hasMemorableWord() async {
-    final hash = await _secureStorage.read(key: _mwFullHashKey);
-    final salt = await _secureStorage.read(key: _mwFullSaltKey);
-    final lengthStr = await _secureStorage.read(key: _mwLengthKey);
+    final results = await Future.wait([
+      _secureStorage.read(key: _mwFullHashKey),
+      _secureStorage.read(key: _mwFullSaltKey),
+      _secureStorage.read(key: _mwLengthKey),
+    ]);
+    final hash = results[0];
+    final salt = results[1];
+    final lengthStr = results[2];
     return hash != null &&
         hash.isNotEmpty &&
         salt != null &&
@@ -341,7 +350,8 @@ class FinanceSecurityService {
   // =========================================================================
 
   Future<bool> isSecurityFullyConfigured() async {
-    return await hasPasscode() && await hasMemorableWord();
+    final status = await Future.wait([hasPasscode(), hasMemorableWord()]);
+    return status[0] && status[1];
   }
 
   // =========================================================================

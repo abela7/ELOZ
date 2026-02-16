@@ -20,6 +20,7 @@ import 'core/services/alarm_service.dart';
 import 'features/tasks/presentation/screens/alarm_screen.dart';
 import 'features/habits/presentation/services/quit_habit_report_access_guard.dart';
 import 'features/habits/data/services/quit_habit_secure_storage_service.dart';
+import 'features/more/data/services/history_optimization_service.dart';
 // Feature modules - each module handles its own initialization
 import 'features/tasks/tasks_module.dart';
 import 'features/habits/habits_module.dart';
@@ -42,7 +43,6 @@ void main() async {
   // WorkManager: safety net for notification recovery (nek12 Layer 3)
   await Workmanager().initialize(
     notificationWorkmanagerCallbackDispatcher,
-    isInDebugMode: kDebugMode,
   );
 
   // Initialize Hive database
@@ -101,7 +101,9 @@ Future<void> _runPostStartupInitialization() async {
     await hub.initialize();
     final cancelled = await hub.cancelForModule(moduleId: 'sleep_reminder');
     if (cancelled > 0 && kDebugMode) {
-      debugPrint('Migrated: cancelled $cancelled legacy sleep_reminder notifications');
+      debugPrint(
+        'Migrated: cancelled $cancelled legacy sleep_reminder notifications',
+      );
     }
     // Sync universal reminders to OS scheduler (background – don't block startup)
     unawaited(UniversalNotificationScheduler().syncAll());
@@ -143,6 +145,13 @@ Future<void> _runPostStartupInitialization() async {
   } catch (e) {
     debugPrint('⚠️ Finance maintenance failed: $e');
   }
+
+  // Phase 2 background optimization session.
+  unawaited(
+    HistoryOptimizationService.instance.runSessionBackfill(
+      maxChunksPerSession: 6,
+    ),
+  );
 }
 
 class LifeManagerApp extends ConsumerStatefulWidget {
@@ -225,6 +234,12 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
       _checkForRingingAlarms();
       // Refresh notification schedules if we were backgrounded long enough.
       unawaited(NotificationSystemRefresher.instance.onAppResumed());
+      // Run a short optimization session while app is active.
+      unawaited(
+        HistoryOptimizationService.instance.runSessionBackfill(
+          maxChunksPerSession: 4,
+        ),
+      );
     }
   }
 

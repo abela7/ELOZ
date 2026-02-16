@@ -49,6 +49,7 @@ class FinanceModule {
   static bool _defaultsInitialized = false;
   static bool _recurringProcessed = false;
   static bool _recurringProcessing = false;
+  static Future<void>? _initFuture;
 
   /// Initialize the Finance module
   ///
@@ -58,6 +59,41 @@ class FinanceModule {
     bool deferRecurringProcessing = false,
     bool preOpenBoxes = true,
     bool bootstrapDefaults = true,
+  }) async {
+    final inFlight = _initFuture;
+    if (inFlight != null) {
+      await inFlight;
+      if (preOpenBoxes && !_boxesPreopened) {
+        await _preOpenBoxes();
+      }
+      if (bootstrapDefaults && !_defaultsInitialized) {
+        await _initializeDefaultData();
+      }
+      if (!deferRecurringProcessing) {
+        await _processRecurringTransactions();
+      }
+      return;
+    }
+
+    final run = _runInit(
+      deferRecurringProcessing: deferRecurringProcessing,
+      preOpenBoxes: preOpenBoxes,
+      bootstrapDefaults: bootstrapDefaults,
+    );
+    _initFuture = run;
+    try {
+      await run;
+    } finally {
+      if (identical(_initFuture, run)) {
+        _initFuture = null;
+      }
+    }
+  }
+
+  static Future<void> _runInit({
+    required bool deferRecurringProcessing,
+    required bool preOpenBoxes,
+    required bool bootstrapDefaults,
   }) async {
     if (!_initialized) {
       // Register Finance-related Hive adapters
@@ -138,18 +174,20 @@ class FinanceModule {
 
   static Future<void> _preOpenBoxes() async {
     if (_boxesPreopened) return;
-    await HiveService.getBox<Transaction>('transactionsBox');
-    await HiveService.getBox<TransactionCategory>('transactionCategoriesBox');
-    await HiveService.getBox<TransactionTemplate>('transactionTemplatesBox');
-    await HiveService.getBox<Budget>('budgetsBox');
-    await HiveService.getBox<Account>('accountsBox');
-    await HiveService.getBox<DailyBalance>('dailyBalancesBox');
-    await HiveService.getBox<DebtCategory>('debtCategoriesBox');
-    await HiveService.getBox<Debt>('debtsBox');
-    await HiveService.getBox<BillCategory>('billCategoriesBox');
-    await HiveService.getBox<Bill>('billsBox');
-    await HiveService.getBox<SavingsGoal>('savingsGoalsBox');
-    await HiveService.getBox<RecurringIncome>('recurring_incomes');
+    await Future.wait([
+      HiveService.getBox<Transaction>('transactionsBox'),
+      HiveService.getBox<TransactionCategory>('transactionCategoriesBox'),
+      HiveService.getBox<TransactionTemplate>('transactionTemplatesBox'),
+      HiveService.getBox<Budget>('budgetsBox'),
+      HiveService.getBox<Account>('accountsBox'),
+      HiveService.getBox<DailyBalance>('dailyBalancesBox'),
+      HiveService.getBox<DebtCategory>('debtCategoriesBox'),
+      HiveService.getBox<Debt>('debtsBox'),
+      HiveService.getBox<BillCategory>('billCategoriesBox'),
+      HiveService.getBox<Bill>('billsBox'),
+      HiveService.getBox<SavingsGoal>('savingsGoalsBox'),
+      HiveService.getBox<RecurringIncome>('recurring_incomes'),
+    ], eagerError: true);
     // 'income_categories' box deprecated - using 'transaction_categories' instead
     _boxesPreopened = true;
   }
@@ -228,25 +266,22 @@ class FinanceModule {
         return;
       }
 
+      final existingExpenseCategories = await transactionCategoryRepo
+          .getAllCategories();
+      final existingByName = <String, TransactionCategory>{};
+      for (final category in existingExpenseCategories) {
+        if (category.type == 'expense') {
+          existingByName[category.name.trim().toLowerCase()] = category;
+        }
+      }
+
       // Map old BillCategory IDs to new TransactionCategory IDs
       final Map<String, String> categoryIdMap = {};
 
       // Create TransactionCategory for each BillCategory
       for (final billCat in billCategories) {
-        // Check if a matching TransactionCategory already exists
-        final existingCategories = await transactionCategoryRepo
-            .getAllCategories();
-        TransactionCategory? existing;
-
-        try {
-          existing = existingCategories.firstWhere(
-            (tc) =>
-                tc.name.toLowerCase() == billCat.name.toLowerCase() &&
-                tc.type == 'expense',
-          );
-        } catch (_) {
-          // No matching category found
-        }
+        final normalizedName = billCat.name.trim().toLowerCase();
+        final existing = existingByName[normalizedName];
 
         if (existing != null) {
           // Use existing category
@@ -271,6 +306,7 @@ class FinanceModule {
 
           await transactionCategoryRepo.createCategory(newCategory);
           categoryIdMap[billCat.id] = newCategory.id;
+          existingByName[normalizedName] = newCategory;
           debugPrint('Created new transaction category for "${billCat.name}"');
         }
       }
@@ -344,25 +380,22 @@ class FinanceModule {
         return;
       }
 
+      final existingExpenseCategories = await transactionCategoryRepo
+          .getAllCategories();
+      final existingByName = <String, TransactionCategory>{};
+      for (final category in existingExpenseCategories) {
+        if (category.type == 'expense') {
+          existingByName[category.name.trim().toLowerCase()] = category;
+        }
+      }
+
       // Map old DebtCategory IDs to new TransactionCategory IDs
       final Map<String, String> categoryIdMap = {};
 
       // Create TransactionCategory for each DebtCategory
       for (final debtCat in debtCategories) {
-        // Check if a matching TransactionCategory already exists
-        final existingCategories = await transactionCategoryRepo
-            .getAllCategories();
-        TransactionCategory? existing;
-
-        try {
-          existing = existingCategories.firstWhere(
-            (tc) =>
-                tc.name.toLowerCase() == debtCat.name.toLowerCase() &&
-                tc.type == 'expense',
-          );
-        } catch (_) {
-          // No matching category found
-        }
+        final normalizedName = debtCat.name.trim().toLowerCase();
+        final existing = existingByName[normalizedName];
 
         if (existing != null) {
           // Use existing category
@@ -387,6 +420,7 @@ class FinanceModule {
 
           await transactionCategoryRepo.createCategory(newCategory);
           categoryIdMap[debtCat.id] = newCategory.id;
+          existingByName[normalizedName] = newCategory;
           debugPrint('Created new transaction category for "${debtCat.name}"');
         }
       }

@@ -11,6 +11,7 @@ import '../../utils/currency_utils.dart';
 import '../../utils/expense_range_utils.dart';
 import '../providers/finance_providers.dart';
 import 'add_transaction_screen.dart';
+import 'all_expenses_list_screen.dart';
 import 'bills_subscriptions_screen.dart';
 import 'expense_category_screen.dart';
 import 'expense_report_screen.dart';
@@ -147,14 +148,40 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
 
                 // Expense Categories Grid
                 if (expenseCategories.isNotEmpty) ...[
-                  Text(
-                    'EXPENSE CATEGORIES',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
-                      color: const Color(0xFFCDAF56),
-                      letterSpacing: 1.5,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'EXPENSE CATEGORIES',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFFCDAF56),
+                          letterSpacing: 1.5,
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) =>
+                                  const AllExpensesListScreen(),
+                            ),
+                          ).then((_) =>
+                              ref.invalidate(allTransactionsProvider));
+                        },
+                        child: Text(
+                          'View All Expenses',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: const Color(0xFFCDAF56),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 12),
                 ],

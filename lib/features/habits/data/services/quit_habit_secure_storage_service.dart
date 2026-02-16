@@ -6,6 +6,8 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:hive/hive.dart';
 
+import '../../../../data/local/hive/hive_service.dart';
+
 /// Passcode-bound secure storage for quit-habit data.
 ///
 /// - Uses PBKDF2-HMAC-SHA256 to derive an unwrap key from the passcode.
@@ -185,10 +187,7 @@ class QuitHabitSecureStorageService {
       return Hive.box<T>(boxName);
     }
 
-    return Hive.openBox<T>(
-      boxName,
-      encryptionCipher: HiveAesCipher(List<int>.from(key)),
-    );
+    return HiveService.getBoxWithCipher<T>(boxName, cipherKeyBytes: key);
   }
 
   Future<void> lockSession() async {

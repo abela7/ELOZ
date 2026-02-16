@@ -64,6 +64,8 @@ class WindDownNotificationRepository extends UniversalNotificationRepository {
     await _delegate.init();
 
     final schedule = await _scheduleService.getFullSchedule();
+    final offsetMinutes =
+        await _scheduleService.getReminderOffsetMinutes();
     const names = [
       'Monday', 'Tuesday', 'Wednesday', 'Thursday',
       'Friday', 'Saturday', 'Sunday',
@@ -83,6 +85,8 @@ class WindDownNotificationRepository extends UniversalNotificationRepository {
         entityName: entityName,
         hour: time.hour,
         minute: time.minute,
+        timingValue: offsetMinutes,
+        timingUnit: 'minutes',
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );

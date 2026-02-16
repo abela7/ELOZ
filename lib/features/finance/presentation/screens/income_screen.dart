@@ -15,6 +15,7 @@ import '../../utils/expense_range_utils.dart';
 import '../providers/finance_providers.dart';
 import '../providers/income_providers.dart';
 import 'add_transaction_screen.dart';
+import 'all_income_list_screen.dart';
 import 'income_category_screen.dart';
 import 'income_report_screen.dart';
 import 'recurring_income_screen.dart';
@@ -139,14 +140,40 @@ class _IncomeScreenState extends ConsumerState<IncomeScreen> {
                               children: [
                                 _buildQuickAddSection(isDark, defaultCurrency, categories),
                                 const SizedBox(height: 28),
-                                const Text(
-                                  'INCOME CATEGORIES',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w900,
-                                    color: Color(0xFF4CAF50),
-                                    letterSpacing: 1.5,
-                                  ),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      'INCOME CATEGORIES',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w900,
+                                        color: Color(0xFF4CAF50),
+                                        letterSpacing: 1.5,
+                                      ),
+                                    ),
+                                    GestureDetector(
+                                      onTap: () {
+                                        HapticFeedback.lightImpact();
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) =>
+                                                const AllIncomeListScreen(),
+                                          ),
+                                        ).then((_) =>
+                                            ref.invalidate(allTransactionsProvider));
+                                      },
+                                      child: const Text(
+                                        'View All Income',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF4CAF50),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 const SizedBox(height: 12),
                               ],

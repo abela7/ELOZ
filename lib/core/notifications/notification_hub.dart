@@ -16,6 +16,7 @@ import 'models/notification_lifecycle_event.dart';
 import 'models/notification_log_entry.dart';
 import 'models/universal_notification.dart';
 import 'services/custom_notification_type_store.dart';
+import 'services/notification_source_resolver.dart';
 import 'services/universal_notification_repository.dart';
 import 'services/notification_hub_log_store.dart';
 import 'services/notification_hub_module_settings_store.dart';
@@ -44,6 +45,10 @@ class NotificationHub {
   /// Tracks (notificationId → scheduledAt ISO) so we only log "scheduled"
   /// when something actually changes. Prevents log spam from repeated syncs.
   final Map<int, String> _lastScheduledAt = <int, String>{};
+  static const Duration _adapterLookupTimeout = Duration(seconds: 2);
+  static const Duration _adapterLookupPollInterval = Duration(
+    milliseconds: 50,
+  );
 
   Future<void> initialize({bool startupOptimized = true}) async {
     if (_initialized) {
@@ -527,39 +532,42 @@ class NotificationHub {
   }) async {
     await initialize();
 
-    final pending = await _notificationService.getPendingNotifications();
-    var cancelled = 0;
+    final pending = await _notificationService
+        .getDetailedPendingNotifications();
+    final cancelledIds = <int>{};
 
-    for (final request in pending) {
-      final parsed = NotificationHubPayload.tryParse(request.payload);
-      if (parsed == null) {
+    for (final info in pending) {
+      final parsed = NotificationHubPayload.tryParse(info.payload);
+      final pendingModuleId = parsed?.moduleId ?? _moduleIdForPendingInfo(info);
+      final pendingEntityId = parsed?.entityId ?? info.entityId;
+      if (pendingModuleId != moduleId || pendingEntityId != entityId) {
         continue;
       }
-      if (parsed.moduleId != moduleId || parsed.entityId != entityId) {
+      if (!cancelledIds.add(info.id)) {
         continue;
       }
 
       await _notificationService.cancelPendingNotificationById(
-        notificationId: request.id,
-        entityId: entityId,
+        notificationId: info.id,
+        entityId: pendingEntityId,
       );
-      cancelled++;
+      _forgetScheduledAtFor(info.id);
 
       await _logStore.append(
         NotificationLogEntry.create(
           moduleId: moduleId,
-          entityId: entityId,
-          notificationId: request.id,
-          title: request.title ?? '',
-          body: request.body ?? '',
-          payload: request.payload,
+          entityId: pendingEntityId,
+          notificationId: info.id,
+          title: info.title,
+          body: info.body,
+          payload: info.payload,
           event: NotificationLifecycleEvent.cancelled,
           metadata: const <String, dynamic>{'source': 'cancel_for_entity'},
         ),
       );
     }
 
-    return cancelled;
+    return cancelledIds.length;
   }
 
   /// Cancels all pending notifications belonging to [moduleId].
@@ -575,23 +583,25 @@ class NotificationHub {
 
     for (final info in pending) {
       final parsed = NotificationHubPayload.tryParse(info.payload);
-      if (parsed == null || parsed.moduleId != moduleId) {
+      final pendingModuleId = parsed?.moduleId ?? _moduleIdForPendingInfo(info);
+      if (pendingModuleId != moduleId) {
         continue;
       }
-      if (cancelledIds.contains(info.id)) {
+      if (!cancelledIds.add(info.id)) {
         continue;
       }
+      final pendingEntityId = parsed?.entityId ?? info.entityId;
 
       await _notificationService.cancelPendingNotificationById(
         notificationId: info.id,
-        entityId: parsed.entityId,
+        entityId: pendingEntityId,
       );
-      cancelledIds.add(info.id);
+      _forgetScheduledAtFor(info.id);
 
       await _logStore.append(
         NotificationLogEntry.create(
           moduleId: moduleId,
-          entityId: parsed.entityId,
+          entityId: pendingEntityId,
           notificationId: info.id,
           payload: info.payload,
           title: info.title,
@@ -717,21 +727,46 @@ class NotificationHub {
     required int notificationId,
     String? entityId,
     String? payload,
+    String? title,
+    String? body,
+    Map<String, dynamic>? metadata,
+    /// When payload is null or unparseable, use these for correct source tracking.
+    String? moduleId,
+    String? section,
   }) async {
     await initialize();
     await _notificationService.cancelPendingNotificationById(
       notificationId: notificationId,
       entityId: entityId,
     );
+    _forgetScheduledAtFor(notificationId);
 
     final parsed = NotificationHubPayload.tryParse(payload);
+    var logModuleId = parsed?.moduleId ?? moduleId;
+    var finalEntityId = entityId ?? parsed?.entityId ?? '';
+
+    if (logModuleId == null || logModuleId.isEmpty || logModuleId == 'unknown') {
+      final resolved = await NotificationSourceResolver().resolve(notificationId);
+      if (resolved != null) {
+        logModuleId = resolved.moduleId;
+        if (finalEntityId.isEmpty) finalEntityId = resolved.entityId;
+        if ((payload ?? '').isEmpty) {
+          payload = NotificationSourceResolver.buildPayloadFromResolved(resolved);
+        }
+      } else {
+        logModuleId = 'unknown';
+      }
+    }
     await _logStore.append(
       NotificationLogEntry.create(
-        moduleId: parsed?.moduleId ?? 'unknown',
-        entityId: entityId ?? parsed?.entityId ?? '',
+        moduleId: logModuleId,
+        entityId: finalEntityId,
         notificationId: notificationId,
+        title: title ?? '',
+        body: body ?? '',
         payload: payload,
         event: NotificationLifecycleEvent.cancelled,
+        metadata: metadata ?? const <String, dynamic>{},
       ),
     );
   }
@@ -755,6 +790,7 @@ class NotificationHub {
       notificationId: notificationId,
       entityId: entityId,
     );
+    _forgetScheduledAtFor(notificationId);
 
     final adapter = parsed != null ? _adapters[parsed.moduleId] : null;
     if (adapter != null && parsed != null) {
@@ -797,8 +833,21 @@ class NotificationHub {
       return false;
     }
 
-    final adapter = _adapters[parsed.moduleId];
+    await initialize();
+
+    final adapter = await _waitForAdapter(parsed.moduleId);
     if (adapter == null) {
+      await _logStore.append(
+        NotificationLogEntry.create(
+          moduleId: parsed.moduleId,
+          entityId: parsed.entityId,
+          payload: payload,
+          event: NotificationLifecycleEvent.failed,
+          metadata: const <String, dynamic>{
+            'reason': 'adapter_not_registered_for_tap',
+          },
+        ),
+      );
       return false;
     }
 
@@ -847,9 +896,29 @@ class NotificationHub {
       return false;
     }
 
-    final adapter = _adapters[parsed.moduleId];
+    await initialize();
+
+    final adapter = await _waitForAdapter(parsed.moduleId);
     if (adapter == null) {
-      debugPrint('NotificationHub: No adapter for module "${parsed.moduleId}"');
+      if (kDebugMode) {
+        debugPrint(
+          'NotificationHub: No adapter for module "${parsed.moduleId}" '
+          '(registered: ${_adapters.keys.toList()})',
+        );
+      }
+      await _logStore.append(
+        NotificationLogEntry.create(
+          moduleId: parsed.moduleId,
+          entityId: parsed.entityId,
+          notificationId: notificationId,
+          payload: payload,
+          actionId: actionId,
+          event: NotificationLifecycleEvent.failed,
+          metadata: const <String, dynamic>{
+            'reason': 'adapter_not_registered_for_action',
+          },
+        ),
+      );
       return false;
     }
 
@@ -1064,6 +1133,36 @@ class NotificationHub {
       return info.type;
     }
     return 'unknown';
+  }
+
+  Future<MiniAppNotificationAdapter?> _waitForAdapter(
+    String moduleId, {
+    Duration timeout = _adapterLookupTimeout,
+    Duration pollInterval = _adapterLookupPollInterval,
+  }) async {
+    var adapter = _adapters[moduleId];
+    if (adapter != null) {
+      return adapter;
+    }
+
+    final watch = Stopwatch()..start();
+    while (watch.elapsed < timeout) {
+      await Future<void>.delayed(pollInterval);
+      adapter = _adapters[moduleId];
+      if (adapter != null) {
+        return adapter;
+      }
+    }
+    return null;
+  }
+
+  void _forgetScheduledAtFor(int notificationId) {
+    _lastScheduledAt.remove(notificationId);
+    if (notificationId >= 100000) {
+      _lastScheduledAt.remove(notificationId - 100000);
+      return;
+    }
+    _lastScheduledAt.remove(notificationId + 100000);
   }
 
   Future<void> _ensureModuleStatesLoaded() async {

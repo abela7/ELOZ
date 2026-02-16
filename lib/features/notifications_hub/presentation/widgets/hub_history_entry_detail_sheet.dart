@@ -7,6 +7,7 @@ import '../../../../core/notifications/models/notification_hub_payload.dart';
 import '../../../../core/notifications/models/notification_lifecycle_event.dart';
 import '../../../../core/notifications/models/notification_log_entry.dart';
 import '../../../../core/notifications/notifications.dart';
+import '../../../../core/notifications/services/notification_source_resolver.dart';
 
 /// Bottom sheet showing advanced details for a history log entry with
 /// "Go to source" and "Delete reminder from source" actions.
@@ -73,18 +74,75 @@ class HubHistoryEntryDetailSheet extends StatelessWidget {
   NotificationHubPayload? get _parsed =>
       entry.payload != null ? NotificationHubPayload.tryParse(entry.payload!) : null;
 
-  String get _sectionDisplay {
-    final p = _parsed;
-    if (p == null || p.extras.isEmpty) return entry.moduleId;
+  /// Display title: use entry.title, or derive from payload when empty.
+  String get _displayTitle =>
+      displayTitleForEntry(entry, hub);
+
+  /// Shared: derive display title from entry (for list + detail).
+  static String displayTitleForEntry(
+    NotificationLogEntry entry,
+    NotificationHub hub,
+  ) {
+    if (entry.title.isNotEmpty) return entry.title;
+    final p =
+        entry.payload != null
+            ? NotificationHubPayload.tryParse(entry.payload!)
+            : null;
+    if (p == null) return 'Notification';
+    if (p.moduleId == 'sleep' && p.entityId.startsWith('sleep_winddown_')) {
+      final day = _weekdayFromEntityId(p.entityId);
+      return day != null ? 'Wind-down reminder ($day)' : 'Wind-down reminder';
+    }
+    if (p.moduleId == 'sleep') {
+      final sectionId = p.extras['section'] ?? '';
+      if (sectionId == 'bedtime') return 'Bedtime reminder';
+      if (sectionId == 'wakeup') return 'Wake-up reminder';
+      if (sectionId == 'winddown') return 'Wind-down reminder';
+    }
     final sectionId = p.extras['section'] ?? p.extras['type'] ?? '';
-    if (sectionId.isEmpty) return hub.moduleDisplayName(entry.moduleId);
-    return hub.sectionDisplayName(entry.moduleId, sectionId) ?? sectionId;
+    final sectionName = sectionId.isNotEmpty
+        ? (hub.sectionDisplayName(p.moduleId, sectionId) ?? sectionId)
+        : hub.moduleDisplayName(p.moduleId);
+    return '$sectionName reminder';
   }
 
-  bool get _canGoToSource =>
-      entry.payload != null &&
-      _parsed != null &&
-      hub.adapterFor(entry.moduleId) != null;
+  static String? _weekdayFromEntityId(String entityId) {
+    const map = {
+      'sleep_winddown_mon': 'Monday',
+      'sleep_winddown_tue': 'Tuesday',
+      'sleep_winddown_wed': 'Wednesday',
+      'sleep_winddown_thu': 'Thursday',
+      'sleep_winddown_fri': 'Friday',
+      'sleep_winddown_sat': 'Saturday',
+      'sleep_winddown_sun': 'Sunday',
+    };
+    return map[entityId];
+  }
+
+  String get _cancelledReason =>
+      entry.metadata['reason'] as String? ?? '';
+
+  String get _fromDisplay {
+    final p = _parsed;
+    final moduleId = p?.moduleId ?? entry.moduleId;
+    return hub.moduleDisplayName(moduleId);
+  }
+
+  String get _sectionDisplay {
+    final p = _parsed;
+    if (p == null || p.extras.isEmpty) return _fromDisplay;
+    final sectionId = p.extras['section'] ?? p.extras['type'] ?? '';
+    if (sectionId.isEmpty) return _fromDisplay;
+    final moduleId = p.moduleId;
+    return hub.sectionDisplayName(moduleId, sectionId) ?? sectionId;
+  }
+
+  bool get _canGoToSource {
+    final p = _parsed;
+    if (entry.payload == null || p == null) return false;
+    final moduleId = p.moduleId.isNotEmpty ? p.moduleId : entry.moduleId;
+    return hub.adapterFor(moduleId) != null;
+  }
 
   bool get _canDelete =>
       entry.notificationId != null &&
@@ -136,7 +194,7 @@ class HubHistoryEntryDetailSheet extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        entry.title.isEmpty ? 'Notification' : entry.title,
+                        _displayTitle,
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w800,
@@ -147,7 +205,7 @@ class HubHistoryEntryDetailSheet extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '${hub.moduleDisplayName(entry.moduleId)} • $_sectionDisplay',
+                        '$_fromDisplay • $_sectionDisplay',
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w500,
@@ -165,32 +223,11 @@ class HubHistoryEntryDetailSheet extends StatelessWidget {
               controller: scrollController,
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
               children: [
-                _DetailSection(
-                  title: 'Source & Event',
+                _SourceEventSection(
+                  entry: entry,
+                  hub: hub,
                   isDark: isDark,
-                  children: [
-                    _DetailRow(
-                      label: 'From',
-                      value: hub.moduleDisplayName(entry.moduleId),
-                      isDark: isDark,
-                    ),
-                    _DetailRow(
-                      label: 'Section',
-                      value: _sectionDisplay,
-                      isDark: isDark,
-                    ),
-                    _DetailRow(
-                      label: 'Event',
-                      value: entry.event.label,
-                      isDark: isDark,
-                    ),
-                    _DetailRow(
-                      label: 'When',
-                      value: DateFormat('EEEE, MMM d, y • h:mm a')
-                          .format(entry.timestamp),
-                      isDark: isDark,
-                    ),
-                  ],
+                  cancelledReason: _cancelledReason,
                 ),
                 _DetailSection(
                   title: 'Content',
@@ -511,6 +548,134 @@ class HubHistoryEntryDetailSheet extends StatelessWidget {
       NotificationLifecycleEvent.missed => Colors.amber,
       NotificationLifecycleEvent.failed => Colors.red,
     };
+  }
+}
+
+class _SourceEventSection extends StatelessWidget {
+  final NotificationLogEntry entry;
+  final NotificationHub hub;
+  final bool isDark;
+  final String cancelledReason;
+
+  const _SourceEventSection({
+    required this.entry,
+    required this.hub,
+    required this.isDark,
+    required this.cancelledReason,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final parsed =
+        entry.payload != null
+            ? NotificationHubPayload.tryParse(entry.payload!)
+            : null;
+    final fromDisplay = () {
+      final m = parsed?.moduleId ?? entry.moduleId;
+      return hub.moduleDisplayName(m);
+    };
+    final sectionDisplay = () {
+      if (parsed == null || parsed.extras.isEmpty) return fromDisplay();
+      final s = parsed.extras['section'] ?? parsed.extras['type'] ?? '';
+      if (s.isEmpty) return fromDisplay();
+      return hub.sectionDisplayName(parsed.moduleId, s) ?? s;
+    };
+
+    if (entry.moduleId == 'unknown' &&
+        entry.notificationId != null) {
+      return _DetailSection(
+        title: 'Source & Event',
+        isDark: isDark,
+        children: [
+          FutureBuilder<ResolvedNotificationSource?>(
+            future: NotificationSourceResolver().resolve(entry.notificationId!),
+            builder: (context, snapshot) {
+              final resolved = snapshot.data;
+              final from = resolved != null
+                  ? hub.moduleDisplayName(resolved.moduleId)
+                  : fromDisplay();
+              final section = resolved != null
+                  ? (hub.sectionDisplayName(
+                          resolved.moduleId,
+                          resolved.section) ??
+                      (resolved.section.isNotEmpty
+                          ? resolved.section
+                          : from))
+                  : sectionDisplay();
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _DetailRow(label: 'From', value: from, isDark: isDark),
+                  _DetailRow(label: 'Section', value: section, isDark: isDark),
+                  if (resolved == null)
+                    _DetailRow(
+                      label: 'Note',
+                      value:
+                          'Source unknown: logged from a cancelled reminder before '
+                          'source tracking was improved. Notification ID can be '
+                          'used to trace in logs.',
+                      isDark: isDark,
+                      maxLines: 3,
+                    ),
+                ],
+              );
+            },
+          ),
+          _DetailRow(
+            label: 'Event',
+            value: entry.event.label,
+            isDark: isDark,
+          ),
+          if (entry.event == NotificationLifecycleEvent.cancelled &&
+              cancelledReason.isNotEmpty)
+            _DetailRow(
+              label: 'Reason',
+              value: cancelledReason,
+              isDark: isDark,
+            ),
+          _DetailRow(
+            label: 'When',
+            value: DateFormat('EEEE, MMM d, y • h:mm a')
+                .format(entry.timestamp),
+            isDark: isDark,
+          ),
+        ],
+      );
+    }
+
+    return _DetailSection(
+      title: 'Source & Event',
+      isDark: isDark,
+      children: [
+        _DetailRow(
+          label: 'From',
+          value: fromDisplay(),
+          isDark: isDark,
+        ),
+        _DetailRow(
+          label: 'Section',
+          value: sectionDisplay(),
+          isDark: isDark,
+        ),
+        _DetailRow(
+          label: 'Event',
+          value: entry.event.label,
+          isDark: isDark,
+        ),
+        if (entry.event == NotificationLifecycleEvent.cancelled &&
+            cancelledReason.isNotEmpty)
+          _DetailRow(
+            label: 'Reason',
+            value: cancelledReason,
+            isDark: isDark,
+          ),
+        _DetailRow(
+          label: 'When',
+          value: DateFormat('EEEE, MMM d, y • h:mm a').format(entry.timestamp),
+          isDark: isDark,
+        ),
+      ],
+    );
   }
 }
 

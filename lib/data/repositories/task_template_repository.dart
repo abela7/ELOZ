@@ -1,4 +1,6 @@
 import 'package:hive_flutter/hive_flutter.dart';
+
+import '../local/hive/hive_service.dart';
 import '../models/task_template.dart';
 
 /// Repository for managing TaskTemplate persistence with Hive
@@ -11,7 +13,7 @@ class TaskTemplateRepository {
     if (_box != null && _box!.isOpen) {
       return _box!;
     }
-    _box = await Hive.openBox<TaskTemplate>(_boxName);
+    _box = await HiveService.getBox<TaskTemplate>(_boxName);
     return _box!;
   }
 
@@ -30,7 +32,9 @@ class TaskTemplateRepository {
   /// Get templates without category (uncategorized)
   Future<List<TaskTemplate>> getUncategorizedTemplates() async {
     final box = await _getBox();
-    return box.values.where((t) => t.categoryId == null || t.categoryId!.isEmpty).toList();
+    return box.values
+        .where((t) => t.categoryId == null || t.categoryId!.isEmpty)
+        .toList();
   }
 
   /// Get a template by ID

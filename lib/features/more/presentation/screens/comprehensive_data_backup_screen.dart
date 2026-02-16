@@ -6,7 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/theme/dark_gradient.dart';
+import '../../../../core/data/history_optimization_models.dart';
 import '../../data/services/comprehensive_app_backup_service.dart';
+import '../../data/services/history_optimization_service.dart';
 import '../../data/services/hive_database_inspector_service.dart';
 
 class ComprehensiveDataBackupScreen extends StatefulWidget {
@@ -23,6 +25,8 @@ class _ComprehensiveDataBackupScreenState
       ComprehensiveAppBackupService();
   final HiveDatabaseInspectorService _hiveInspectorService =
       HiveDatabaseInspectorService();
+  final HistoryOptimizationService _historyOptimizationService =
+      HistoryOptimizationService.instance;
 
   bool _isWorking = false;
   String? _status;
@@ -30,6 +34,14 @@ class _ComprehensiveDataBackupScreenState
   bool _lastActionWasImport = false;
   ComprehensiveBackupProgress? _activeProgress;
   ComprehensiveBackupCancellationToken? _cancellationToken;
+  late Future<HistoryOptimizationStatus> _historyStatusFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _historyStatusFuture = _historyOptimizationService.getStatus();
+    _historyOptimizationService.refreshStatus();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +61,8 @@ class _ComprehensiveDataBackupScreenState
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _buildOptimizationStatusCard(isDark),
+          const SizedBox(height: 12),
           _buildInfoCard(isDark),
           const SizedBox(height: 12),
           _buildActionCard(
@@ -102,6 +116,108 @@ class _ComprehensiveDataBackupScreenState
             _buildSummaryCard(isDark),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildOptimizationStatusCard(bool isDark) {
+    return StreamBuilder<HistoryOptimizationStatus>(
+      stream: _historyOptimizationService.statusStream,
+      builder: (context, snapshot) {
+        return FutureBuilder<HistoryOptimizationStatus>(
+          future: _historyStatusFuture,
+          builder: (context, initialSnapshot) {
+            final status = snapshot.data ?? initialSnapshot.data;
+            if (status == null) {
+              return const SizedBox.shrink();
+            }
+
+            final percent = status.overallPercent;
+            final paused = status.isPaused;
+            final subtitle = status.isComplete
+                ? 'History optimization complete.'
+                : paused
+                ? 'Optimization paused.'
+                : 'Optimizing history in background.';
+
+            return Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF2D3139) : Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.teal.withValues(alpha: 0.28)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Optimizing History',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(subtitle),
+                  const SizedBox(height: 10),
+                  LinearProgressIndicator(
+                    minHeight: 3,
+                    value: (percent / 100).clamp(0, 1),
+                  ),
+                  const SizedBox(height: 8),
+                  Text('Progress: ${percent.toStringAsFixed(1)}%'),
+                  ...status.modules.map(_buildModuleOptimizationLine),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      TextButton.icon(
+                        onPressed: () async {
+                          await _historyOptimizationService.setPaused(!paused);
+                          if (!paused) return;
+                          await _historyOptimizationService
+                              .runSessionBackfill();
+                        },
+                        icon: Icon(
+                          paused
+                              ? Icons.play_arrow_rounded
+                              : Icons.pause_rounded,
+                        ),
+                        label: Text(paused ? 'Resume' : 'Pause'),
+                      ),
+                      TextButton.icon(
+                        onPressed: () async {
+                          await _historyOptimizationService.runSessionBackfill(
+                            maxChunksPerSession: 6,
+                          );
+                        },
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('Run Now'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildModuleOptimizationLine(ModuleHistoryOptimizationStatus module) {
+    final lastIndexed = module.lastIndexedDate;
+    final remainingDays = module.remainingDays;
+    final lastLabel = lastIndexed == null
+        ? 'n/a'
+        : '${lastIndexed.year.toString().padLeft(4, '0')}-${lastIndexed.month.toString().padLeft(2, '0')}-${lastIndexed.day.toString().padLeft(2, '0')}';
+    final remainingLabel = remainingDays == null
+        ? 'n/a'
+        : remainingDays <= 0
+        ? 'done'
+        : '$remainingDays days';
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(
+        '${module.moduleId}: last indexed $lastLabel, remaining $remainingLabel',
+        style: Theme.of(context).textTheme.bodySmall,
       ),
     );
   }

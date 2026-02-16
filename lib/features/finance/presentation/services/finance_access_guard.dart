@@ -17,6 +17,7 @@ class FinanceAccessGuard {
   static bool _sessionUnlocked = false;
   static DateTime? _sessionUnlockedAt;
   static const Duration _sessionTimeout = Duration(minutes: 15);
+  static const Duration _securityOperationTimeout = Duration(seconds: 10);
 
   final FinanceSecurityService _securityService;
   final FinanceDataResetService _dataResetService;
@@ -85,7 +86,10 @@ class FinanceAccessGuard {
     }
 
     // Check if fully configured.
-    final configured = await _securityService.isSecurityFullyConfigured();
+    final configured = await _withTimeout(
+      _securityService.isSecurityFullyConfigured(),
+      operation: 'checking security configuration',
+    );
     if (!context.mounted) return false;
 
     if (!configured) {
@@ -113,7 +117,10 @@ class FinanceAccessGuard {
     bool forcePrompt = false,
     Future<void> Function()? onSecurityEmergencyReset,
   }) async {
-    final hasPasscode = await _securityService.hasPasscode();
+    final hasPasscode = await _withTimeout(
+      _securityService.hasPasscode(),
+      operation: 'checking passcode',
+    );
     if (!context.mounted) return false;
     if (!hasPasscode) return true;
 
@@ -150,7 +157,10 @@ class FinanceAccessGuard {
       _showSnackBar(context, 'Security setup canceled.');
       return false;
     }
-    await _securityService.setMemorableWord(memorableWord);
+    await _withTimeout(
+      _securityService.setMemorableWord(memorableWord),
+      operation: 'saving memorable word',
+    );
     if (!context.mounted) return false;
 
     // Step 2: Passcode.
@@ -162,10 +172,16 @@ class FinanceAccessGuard {
     if (passcode == null) {
       _showSnackBar(context, 'Passcode setup canceled.');
       // Roll back the memorable word since setup is incomplete.
-      await _securityService.clearMemorableWord();
+      await _withTimeout(
+        _securityService.clearMemorableWord(),
+        operation: 'rolling back memorable word',
+      );
       return false;
     }
-    await _securityService.setPasscode(passcode);
+    await _withTimeout(
+      _securityService.setPasscode(passcode),
+      operation: 'saving passcode',
+    );
     if (!context.mounted) return false;
     _showSnackBar(context, 'Finance security configured successfully.');
     return true;
@@ -186,8 +202,10 @@ class FinanceAccessGuard {
     var localAttempts = 0;
 
     // Check recovery-only mode first.
-    final recoveryOnly = await _securityService
-        .isPasscodeRecoveryOnlyModeEnabled();
+    final recoveryOnly = await _withTimeout(
+      _securityService.isPasscodeRecoveryOnlyModeEnabled(),
+      operation: 'checking recovery-only mode',
+    );
     if (!context.mounted) return false;
     if (recoveryOnly) {
       _showSnackBar(
@@ -202,7 +220,10 @@ class FinanceAccessGuard {
 
     while (localAttempts < maxDialogAttempts) {
       // Check lockout.
-      final lockout = await _securityService.getPasscodeLockoutRemaining();
+      final lockout = await _withTimeout(
+        _securityService.getPasscodeLockoutRemaining(),
+        operation: 'checking passcode lockout',
+      );
       if (!context.mounted) return false;
       if (lockout != null) {
         _showSnackBar(
@@ -212,10 +233,14 @@ class FinanceAccessGuard {
         return false;
       }
 
-      final attemptsBeforeLock = await _securityService
-          .getRemainingPasscodeAttemptsBeforeLockout();
-      final attemptsBeforeRecovery = await _securityService
-          .getRemainingPasscodeAttemptsBeforeRecoveryOnly();
+      final attemptsBeforeLock = await _withTimeout(
+        _securityService.getRemainingPasscodeAttemptsBeforeLockout(),
+        operation: 'checking lockout attempts',
+      );
+      final attemptsBeforeRecovery = await _withTimeout(
+        _securityService.getRemainingPasscodeAttemptsBeforeRecoveryOnly(),
+        operation: 'checking recovery-only attempts',
+      );
       if (!context.mounted) return false;
 
       final currentSubtitle = localAttempts == 0
@@ -249,16 +274,28 @@ class FinanceAccessGuard {
       final passcode = result.passcode;
       if (passcode == null) return false;
 
-      final valid = await _securityService.verifyPasscode(passcode);
+      final valid = await _withTimeout(
+        _securityService.verifyPasscode(passcode),
+        operation: 'verifying passcode',
+      );
       if (!context.mounted) return false;
       if (valid) {
-        await _securityService.resetFailedPasscodeAttempts();
-        await _securityService.clearPasscodeRecoveryOnlyMode();
+        await _withTimeout(
+          _securityService.resetFailedPasscodeAttempts(),
+          operation: 'resetting passcode failures',
+        );
+        await _withTimeout(
+          _securityService.clearPasscodeRecoveryOnlyMode(),
+          operation: 'clearing recovery-only mode',
+        );
         return true;
       }
 
       // Register failure.
-      final failure = await _securityService.registerFailedPasscodeAttempt();
+      final failure = await _withTimeout(
+        _securityService.registerFailedPasscodeAttempt(),
+        operation: 'recording failed passcode attempt',
+      );
       if (!context.mounted) return false;
 
       switch (failure.outcome) {
@@ -296,7 +333,10 @@ class FinanceAccessGuard {
     BuildContext context, {
     Future<void> Function()? onSecurityEmergencyReset,
   }) async {
-    final hasWord = await _securityService.hasMemorableWord();
+    final hasWord = await _withTimeout(
+      _securityService.hasMemorableWord(),
+      operation: 'checking memorable word',
+    );
     if (!context.mounted) return false;
     if (!hasWord) {
       _showSnackBar(
@@ -307,7 +347,10 @@ class FinanceAccessGuard {
     }
 
     // Check memorable word lockout.
-    final mwLockout = await _securityService.getMemorableWordLockoutRemaining();
+    final mwLockout = await _withTimeout(
+      _securityService.getMemorableWordLockoutRemaining(),
+      operation: 'checking memorable-word lockout',
+    );
     if (!context.mounted) return false;
     if (mwLockout != null) {
       _showSnackBar(
@@ -318,12 +361,17 @@ class FinanceAccessGuard {
     }
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final attemptsRemaining = await _securityService
-        .getRemainingMemorableWordAttemptsBeforeWipe();
+    final attemptsRemaining = await _withTimeout(
+      _securityService.getRemainingMemorableWordAttemptsBeforeWipe(),
+      operation: 'checking memorable-word attempts',
+    );
     if (!context.mounted) return false;
 
     // Generate character challenge.
-    final challenge = await _securityService.generateCharacterChallenge();
+    final challenge = await _withTimeout(
+      _securityService.generateCharacterChallenge(),
+      operation: 'creating memorable-word challenge',
+    );
     if (!context.mounted) return false;
 
     // Show the character challenge dialog.
@@ -338,14 +386,17 @@ class FinanceAccessGuard {
     if (charResult == null) return false;
 
     // Verify.
-    final verified = await _securityService.verifyCharacterChallenge(
-      charResult,
+    final verified = await _withTimeout(
+      _securityService.verifyCharacterChallenge(charResult),
+      operation: 'verifying memorable-word challenge',
     );
     if (!context.mounted) return false;
 
     if (!verified) {
-      final failure = await _securityService
-          .registerFailedMemorableWordAttempt();
+      final failure = await _withTimeout(
+        _securityService.registerFailedMemorableWordAttempt(),
+        operation: 'recording failed memorable-word attempt',
+      );
       if (!context.mounted) return false;
 
       switch (failure.outcome) {
@@ -372,9 +423,18 @@ class FinanceAccessGuard {
     }
 
     // Character challenge passed — reset counters and let user create new passcode.
-    await _securityService.resetFailedMemorableWordAttempts();
-    await _securityService.resetFailedPasscodeAttempts();
-    await _securityService.clearPasscodeRecoveryOnlyMode();
+    await _withTimeout(
+      _securityService.resetFailedMemorableWordAttempts(),
+      operation: 'resetting memorable-word failures',
+    );
+    await _withTimeout(
+      _securityService.resetFailedPasscodeAttempts(),
+      operation: 'resetting passcode failures',
+    );
+    await _withTimeout(
+      _securityService.clearPasscodeRecoveryOnlyMode(),
+      operation: 'clearing recovery-only mode',
+    );
     if (!context.mounted) return false;
 
     final newPasscode = await FinanceSecurityDialogs.showCreatePasscodeDialog(
@@ -387,7 +447,10 @@ class FinanceAccessGuard {
       return false;
     }
 
-    await _securityService.setPasscode(newPasscode);
+    await _withTimeout(
+      _securityService.setPasscode(newPasscode),
+      operation: 'saving new passcode',
+    );
     if (!context.mounted) return false;
     _showSnackBar(context, 'Passcode reset successful.');
     return true;
@@ -425,6 +488,21 @@ class FinanceAccessGuard {
   // =========================================================================
   // Helpers
   // =========================================================================
+
+  Future<T> _withTimeout<T>(
+    Future<T> future, {
+    required String operation,
+  }) async {
+    return future.timeout(
+      _securityOperationTimeout,
+      onTimeout: () {
+        throw TimeoutException(
+          'Finance security timed out while $operation.',
+          _securityOperationTimeout,
+        );
+      },
+    );
+  }
 
   String _formatDuration(Duration duration) {
     final minutes = duration.inMinutes;

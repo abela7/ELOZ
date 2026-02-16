@@ -379,6 +379,9 @@ Future<Map<String, dynamic>> _workerApplyStagedHiveFiles(
     payload['financeHiveBoxes'],
   ).map((String item) => item.toLowerCase()).toSet();
   final stagedHiveFiles = _workerAsStringList(payload['stagedHiveFiles']);
+  final debugCancelAfterWrites = _asIntStatic(
+    payload['debugCancelAfterWrites'],
+  );
 
   final eligibleFileNames = stagedHiveFiles.where((String fileName) {
     if (!_isSafeHiveFilenameStatic(fileName)) {
@@ -448,6 +451,11 @@ Future<Map<String, dynamic>> _workerApplyStagedHiveFiles(
         total: eligibleFileNames.length,
         message: 'Applying Hive files...',
       );
+
+      if (debugCancelAfterWrites > 0 &&
+          newFiles.length >= debugCancelAfterWrites) {
+        throw const ComprehensiveBackupCancelledException();
+      }
     }
   } catch (_) {
     for (final targetPath in newFiles) {
@@ -914,6 +922,31 @@ class ComprehensiveAppBackupService {
       payload: <String, dynamic>{'value': value},
     );
     return _asInt(result['value']);
+  }
+
+  @visibleForTesting
+  Future<void> applyStagedHiveFilesForTest({
+    required Directory hiveDirectory,
+    required Directory stagingDirectory,
+    required List<String> stagedHiveFiles,
+    int? debugCancelAfterWrites,
+    void Function(ComprehensiveBackupProgress progress)? onProgress,
+    ComprehensiveBackupCancellationToken? cancellationToken,
+  }) async {
+    await _runWorkerJob(
+      job: _workerJobApplyStaged,
+      payload: <String, dynamic>{
+        'hiveDirectoryPath': hiveDirectory.path,
+        'stagingDirPath': stagingDirectory.path,
+        'stagedHiveFiles': stagedHiveFiles,
+        'financeHiveBoxes': _financeHiveBoxes.toList(),
+        if (debugCancelAfterWrites != null)
+          'debugCancelAfterWrites': debugCancelAfterWrites,
+      },
+      onProgress: onProgress,
+      cancellationToken: cancellationToken,
+      forceKillOnCancel: false,
+    );
   }
 
   Future<Map<String, dynamic>> _runWorkerJob({

@@ -8,12 +8,8 @@ import '../../../features/finance/data/repositories/debt_repository.dart';
 import '../../../features/finance/data/repositories/recurring_income_repository.dart';
 import '../../../features/habits/data/repositories/habit_repository.dart';
 import '../../../features/sleep/data/services/wind_down_schedule_service.dart';
-import '../models/notification_hub_schedule_request.dart';
 import '../models/notification_hub_schedule_result.dart';
-import '../models/universal_notification.dart';
-import '../notification_hub.dart';
 import '../notifications.dart';
-import 'universal_notification_repository.dart';
 
 /// Schedules Universal Notifications with the OS.
 ///
@@ -83,9 +79,65 @@ class UniversalNotificationScheduler {
   }
 
   /// Cancels the OS notification for a universal notification (by its id).
+  /// Passes payload, title, and reason for correct History display.
   Future<void> _cancelForNotification(UniversalNotification n) async {
     final id = _notificationIdFor(n);
-    await _hub.cancelByNotificationId(notificationId: id);
+    final payload = _buildPayloadForLogging(n);
+    final title = _displayNameForLogging(n);
+    final reason = _cancelReasonForLogging(n);
+    await _hub.cancelByNotificationId(
+      notificationId: id,
+      entityId: n.entityId,
+      payload: payload,
+      title: title,
+      metadata: reason != null ? {'reason': reason} : null,
+    );
+  }
+
+  /// Builds a minimal Hub payload so History shows correct From/Section.
+  static String _buildPayloadForLogging(UniversalNotification n) {
+    final section = n.section.isNotEmpty ? 'section:${n.section}' : '';
+    final parts = [n.moduleId, n.entityId, 'at_time', '0', 'minutes'];
+    if (section.isNotEmpty) parts.add(section);
+    return parts.join('|');
+  }
+
+  /// Human-readable name for History (e.g. "Wind-down reminder (Monday)").
+  static String _displayNameForLogging(UniversalNotification n) {
+    if (n.entityName.isNotEmpty) return n.entityName;
+    if (n.moduleId == 'sleep' && n.section == 'winddown') {
+      final day = _weekdayFromEntityId(n.entityId);
+      return day != null ? 'Wind-down reminder ($day)' : 'Wind-down reminder';
+    }
+    if (n.moduleId == 'sleep' && n.section == 'bedtime') return 'Bedtime reminder';
+    if (n.moduleId == 'sleep' && n.section == 'wakeup') return 'Wake-up reminder';
+    if (n.moduleId == 'task') return 'Task reminder';
+    if (n.moduleId == 'habit') return 'Habit reminder';
+    return '${n.section.isNotEmpty ? n.section : n.moduleId} reminder';
+  }
+
+  static String? _weekdayFromEntityId(String entityId) {
+    const map = {
+      'sleep_winddown_mon': 'Monday',
+      'sleep_winddown_tue': 'Tuesday',
+      'sleep_winddown_wed': 'Wednesday',
+      'sleep_winddown_thu': 'Thursday',
+      'sleep_winddown_fri': 'Friday',
+      'sleep_winddown_sat': 'Saturday',
+      'sleep_winddown_sun': 'Sunday',
+    };
+    return map[entityId];
+  }
+
+  /// Reason for cancellation (shown in History).
+  static String? _cancelReasonForLogging(UniversalNotification n) {
+    if (n.moduleId == 'sleep' && n.section == 'winddown') {
+      return 'Wind-down disabled or schedule changed';
+    }
+    if (n.moduleId == 'sleep') {
+      return 'Sleep reminders disabled or schedule changed';
+    }
+    return 'Cancelled during sync';
   }
 
   int _notificationIdFor(UniversalNotification n) {
@@ -137,9 +189,10 @@ class UniversalNotificationScheduler {
     final scheduledAt = _computeScheduledAt(n, due);
     if (scheduledAt.isBefore(
         DateTime.now().subtract(const Duration(seconds: 10)))) {
+      await _cancelForNotification(n);
       if (kDebugMode) {
         debugPrint(
-          'UniversalNotificationScheduler: scheduledAt $scheduledAt in past – skip',
+          'UniversalNotificationScheduler: scheduledAt $scheduledAt in past - cancel and skip',
         );
       }
       return NotificationHubScheduleResult.failed(
@@ -156,7 +209,15 @@ class UniversalNotificationScheduler {
     final body = _resolveTemplate(n.bodyTemplate, variables);
 
     if (title.isEmpty) {
-      return NotificationHubScheduleResult.failed('Title is empty after resolving.');
+      await _cancelForNotification(n);
+      if (kDebugMode) {
+        debugPrint(
+          'UniversalNotificationScheduler: empty title for ${n.id} after template resolution - cancel and skip',
+        );
+      }
+      return NotificationHubScheduleResult.failed(
+        'Title is empty after resolving.',
+      );
     }
 
     // Use configured actions only when actionsEnabled; otherwise no action buttons
@@ -452,3 +513,4 @@ class UniversalNotificationScheduler {
     }
   }
 }
+

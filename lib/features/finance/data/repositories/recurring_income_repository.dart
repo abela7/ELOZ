@@ -1,4 +1,6 @@
 import 'package:hive/hive.dart';
+
+import '../../../../data/local/hive/hive_service.dart';
 import '../models/recurring_income.dart';
 
 /// Repository for managing recurring income sources.
@@ -7,7 +9,7 @@ class RecurringIncomeRepository {
   Box<RecurringIncome>? _box;
 
   Future<void> init() async {
-    _box = await Hive.openBox<RecurringIncome>(_boxName);
+    _box = await HiveService.getBox<RecurringIncome>(_boxName);
   }
 
   Box<RecurringIncome> get _safeBox {
@@ -25,17 +27,13 @@ class RecurringIncomeRepository {
 
   /// Get all active recurring incomes.
   List<RecurringIncome> getActive() {
-    return _safeBox.values
-        .where((income) => income.isActive)
-        .toList()
+    return _safeBox.values.where((income) => income.isActive).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
   }
 
   /// Get all currently active recurring incomes (within date range).
   List<RecurringIncome> getCurrentlyActive() {
-    return _safeBox.values
-        .where((income) => income.isCurrentlyActive)
-        .toList()
+    return _safeBox.values.where((income) => income.isCurrentlyActive).toList()
       ..sort((a, b) => a.startDate.compareTo(b.startDate));
   }
 
@@ -115,7 +113,7 @@ class RecurringIncomeRepository {
   /// Get all recurring incomes due for notification.
   List<RecurringIncome> getPendingNotifications() {
     final now = DateTime.now();
-    
+
     return _safeBox.values.where((income) {
       if (!income.notifyOnDue || !income.isCurrentlyActive) return false;
 
@@ -136,7 +134,11 @@ class RecurringIncomeRepository {
   }
 
   /// Get total expected income for a period.
-  double getTotalExpectedForPeriod(DateTime start, DateTime end, String currency) {
+  double getTotalExpectedForPeriod(
+    DateTime start,
+    DateTime end,
+    String currency,
+  ) {
     double total = 0.0;
 
     for (final income in getCurrentlyActive()) {

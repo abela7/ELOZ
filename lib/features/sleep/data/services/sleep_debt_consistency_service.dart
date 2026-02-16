@@ -8,6 +8,7 @@ import '../repositories/sleep_record_repository.dart';
 /// - Missing night = full target hours as debt.
 /// - 7-day window: Mon-Sun week containing reference date.
 /// - Debt is cumulative from Monday through reference date (ongoing within week).
+/// - Extra sleep can repay prior debt (debt cannot go below zero).
 /// - When moving to next week (e.g. Mon), debt resets for the new week.
 /// - Consistency: % of nights within ±30min of median bedtime.
 /// - Need >= 2 main sleeps to show consistency.
@@ -19,7 +20,7 @@ class SleepDebtConsistencyService {
   final SleepRecordRepository _repository;
 
   SleepDebtConsistencyService({required SleepRecordRepository repository})
-      : _repository = repository;
+    : _repository = repository;
 
   /// Returns Monday (00:00) of the week containing [date]. Week = Mon-Sun.
   static DateTime _mondayOfWeek(DateTime date) {
@@ -38,11 +39,20 @@ class SleepDebtConsistencyService {
   }) async {
     final now = overrideToday ?? DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final ref = DateTime(referenceDate.year, referenceDate.month, referenceDate.day);
+    final ref = DateTime(
+      referenceDate.year,
+      referenceDate.month,
+      referenceDate.day,
+    );
     final weekMonday = _mondayOfWeek(ref);
-    final weekSunday = weekMonday.add(const Duration(days: _debtWindowDays - 1));
+    final weekSunday = weekMonday.add(
+      const Duration(days: _debtWindowDays - 1),
+    );
 
-    final mainSleep = await _repository.getMainSleepByDateRange(weekMonday, weekSunday);
+    final mainSleep = await _repository.getMainSleepByDateRange(
+      weekMonday,
+      weekSunday,
+    );
 
     // Store actual sleep in minutes per date for precise debt calculation.
     final targetMinutes = (targetHours * 60).round();
@@ -64,19 +74,21 @@ class SleepDebtConsistencyService {
       if (d.isAfter(today)) break; // Never count future days
 
       final dayMins = minutesByDate[d] ?? 0;
+      final delta = dayMins > 0 ? targetMinutes - dayMins : targetMinutes;
+      final nightlyDebt = delta > 0 ? delta : 0;
 
-      if (dayMins > 0) {
-        final deficit = targetMinutes - dayMins;
-        final debt = deficit > 0 ? deficit : 0;
-        weeklyDebtMinutes += debt;
-        if (d == ref) {
-          dailyDebtMinutes = debt;
-        }
-      } else {
-        weeklyDebtMinutes += targetMinutes;
-        if (d == ref) {
-          dailyDebtMinutes = targetMinutes;
-        }
+      // Rolling debt model:
+      // - deficit adds debt
+      // - surplus repays debt
+      // - never below zero
+      weeklyDebtMinutes += delta;
+      if (weeklyDebtMinutes < 0) {
+        weeklyDebtMinutes = 0;
+      }
+
+      if (d == ref) {
+        // Keep "selected night" as that night's own deficit (not rolling balance).
+        dailyDebtMinutes = nightlyDebt;
       }
     }
 
@@ -106,8 +118,9 @@ class SleepDebtConsistencyService {
     return SleepDebtConsistency(
       dailyDebtMinutes: dailyDebtMinutes,
       weeklyDebtMinutes: weeklyDebtMinutes,
-      consistencyScorePercent:
-          bedtimes.length >= _minNightsForConsistency ? consistencyScore : null,
+      consistencyScorePercent: bedtimes.length >= _minNightsForConsistency
+          ? consistencyScore
+          : null,
       nightsInWindow: nightsInWindow,
       totalNightsWithData: bedtimeByDate.length,
       hasEnoughDataForConsistency: bedtimes.length >= _minNightsForConsistency,

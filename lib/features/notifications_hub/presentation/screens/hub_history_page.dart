@@ -68,7 +68,6 @@ class _HubHistoryPageState extends State<HubHistoryPage> {
     final grouped = _applyGrouping(processed);
     final sections = _extractSections(compacted);
 
-    // Build event counts from the full compacted set (before section filter).
     final eventCounts = <NotificationLifecycleEvent, int>{};
     for (final e in compacted) {
       eventCounts[e.event] = (eventCounts[e.event] ?? 0) + 1;
@@ -149,8 +148,8 @@ class _HubHistoryPageState extends State<HubHistoryPage> {
         break;
       case _SortBy.title:
         cmp = (a, b) {
-          final ta = a.title.isEmpty ? 'Notification' : a.title;
-          final tb = b.title.isEmpty ? 'Notification' : b.title;
+          final ta = HubHistoryEntryDetailSheet.displayTitleForEntry(a, _hub);
+          final tb = HubHistoryEntryDetailSheet.displayTitleForEntry(b, _hub);
           final r = ta.toLowerCase().compareTo(tb.toLowerCase());
           return r != 0 ? r : b.timestamp.compareTo(a.timestamp);
         };
@@ -1442,7 +1441,10 @@ class _HistTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    entry.title.isEmpty ? 'Notification' : entry.title,
+                    HubHistoryEntryDetailSheet.displayTitleForEntry(
+                      entry,
+                      hub,
+                    ),
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,

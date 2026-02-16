@@ -39,6 +39,89 @@ void main() {
       expect(result.weeklyDebtMinutes, equals(5 * 480 + 120 + 180));
     });
 
+    test(
+      'extra sleep repays debt within the same Monday-Sunday week',
+      () async {
+        final repo = FakeSleepRecordRepository();
+        repo.records = [
+          SleepRecord(
+            bedTime: DateTime(
+              2025,
+              2,
+              3,
+              22,
+              0,
+            ), // Mon: 6h (target 7h => +1h debt)
+            wakeTime: DateTime(2025, 2, 4, 4, 0),
+            quality: 'good',
+            isNap: false,
+          ),
+          SleepRecord(
+            bedTime: DateTime(2025, 2, 4, 22, 0), // Tue: 6h (debt becomes 2h)
+            wakeTime: DateTime(2025, 2, 5, 4, 0),
+            quality: 'good',
+            isNap: false,
+          ),
+          SleepRecord(
+            bedTime: DateTime(
+              2025,
+              2,
+              5,
+              22,
+              0,
+            ), // Wed: 8h (repays 1h, debt -> 1h)
+            wakeTime: DateTime(2025, 2, 6, 6, 0),
+            quality: 'good',
+            isNap: false,
+          ),
+        ];
+
+        final service = SleepDebtConsistencyService(repository: repo);
+        final result = await service.calculate(
+          referenceDate: DateTime(2025, 2, 5), // Wed
+          targetHours: 7.0,
+          overrideToday: testToday,
+        );
+
+        expect(result.weeklyDebtMinutes, equals(60)); // 1h left
+        expect(result.dailyDebtMinutes, equals(0)); // Wed itself has no deficit
+      },
+    );
+
+    test('debt never goes below zero when surplus exceeds deficit', () async {
+      final repo = FakeSleepRecordRepository();
+      repo.records = [
+        SleepRecord(
+          bedTime: DateTime(
+            2025,
+            2,
+            3,
+            22,
+            0,
+          ), // Mon: 6h (target 7h => +1h debt)
+          wakeTime: DateTime(2025, 2, 4, 4, 0),
+          quality: 'good',
+          isNap: false,
+        ),
+        SleepRecord(
+          bedTime: DateTime(2025, 2, 4, 22, 0), // Tue: 10h (repays all debt)
+          wakeTime: DateTime(2025, 2, 5, 8, 0),
+          quality: 'good',
+          isNap: false,
+        ),
+      ];
+
+      final service = SleepDebtConsistencyService(repository: repo);
+      final result = await service.calculate(
+        referenceDate: DateTime(2025, 2, 4), // Tue
+        targetHours: 7.0,
+        overrideToday: testToday,
+      );
+
+      expect(result.weeklyDebtMinutes, equals(0));
+      expect(result.dailyDebtMinutes, equals(0));
+    });
+
     test('naps are excluded from debt calculation', () async {
       final repo = FakeSleepRecordRepository();
       repo.records = [
@@ -57,7 +140,10 @@ void main() {
       );
 
       expect(result.totalNightsWithData, 0);
-      expect(result.weeklyDebtMinutes, equals(8 * 60 * 7)); // Full week, no main sleep
+      expect(
+        result.weeklyDebtMinutes,
+        equals(8 * 60 * 7),
+      ); // Full week, no main sleep
     });
 
     test('consistency is computed with available data (>= 2 nights)', () async {
@@ -92,13 +178,48 @@ void main() {
       final repo = FakeSleepRecordRepository();
       // 7 nights Mon Feb 3 - Sun Feb 9, all at 22:30 (±15min)
       repo.records = [
-        SleepRecord(bedTime: DateTime(2025, 2, 3, 22, 30), wakeTime: DateTime(2025, 2, 4, 6, 0), quality: 'good', isNap: false),
-        SleepRecord(bedTime: DateTime(2025, 2, 4, 22, 25), wakeTime: DateTime(2025, 2, 5, 6, 0), quality: 'good', isNap: false),
-        SleepRecord(bedTime: DateTime(2025, 2, 5, 22, 35), wakeTime: DateTime(2025, 2, 6, 6, 0), quality: 'good', isNap: false),
-        SleepRecord(bedTime: DateTime(2025, 2, 6, 22, 28), wakeTime: DateTime(2025, 2, 7, 6, 0), quality: 'good', isNap: false),
-        SleepRecord(bedTime: DateTime(2025, 2, 7, 22, 32), wakeTime: DateTime(2025, 2, 8, 6, 0), quality: 'good', isNap: false),
-        SleepRecord(bedTime: DateTime(2025, 2, 8, 22, 27), wakeTime: DateTime(2025, 2, 9, 6, 0), quality: 'good', isNap: false),
-        SleepRecord(bedTime: DateTime(2025, 2, 9, 22, 31), wakeTime: DateTime(2025, 2, 10, 6, 0), quality: 'good', isNap: false),
+        SleepRecord(
+          bedTime: DateTime(2025, 2, 3, 22, 30),
+          wakeTime: DateTime(2025, 2, 4, 6, 0),
+          quality: 'good',
+          isNap: false,
+        ),
+        SleepRecord(
+          bedTime: DateTime(2025, 2, 4, 22, 25),
+          wakeTime: DateTime(2025, 2, 5, 6, 0),
+          quality: 'good',
+          isNap: false,
+        ),
+        SleepRecord(
+          bedTime: DateTime(2025, 2, 5, 22, 35),
+          wakeTime: DateTime(2025, 2, 6, 6, 0),
+          quality: 'good',
+          isNap: false,
+        ),
+        SleepRecord(
+          bedTime: DateTime(2025, 2, 6, 22, 28),
+          wakeTime: DateTime(2025, 2, 7, 6, 0),
+          quality: 'good',
+          isNap: false,
+        ),
+        SleepRecord(
+          bedTime: DateTime(2025, 2, 7, 22, 32),
+          wakeTime: DateTime(2025, 2, 8, 6, 0),
+          quality: 'good',
+          isNap: false,
+        ),
+        SleepRecord(
+          bedTime: DateTime(2025, 2, 8, 22, 27),
+          wakeTime: DateTime(2025, 2, 9, 6, 0),
+          quality: 'good',
+          isNap: false,
+        ),
+        SleepRecord(
+          bedTime: DateTime(2025, 2, 9, 22, 31),
+          wakeTime: DateTime(2025, 2, 10, 6, 0),
+          quality: 'good',
+          isNap: false,
+        ),
       ];
       final service = SleepDebtConsistencyService(repository: repo);
       final result = await service.calculate(
@@ -110,7 +231,10 @@ void main() {
       expect(result.hasEnoughDataForConsistency, isTrue);
       expect(result.consistencyScorePercent, isNotNull);
       expect(result.totalNightsWithData, 7);
-      expect(result.consistencyScorePercent, 100); // All within ±30min of median
+      expect(
+        result.consistencyScorePercent,
+        100,
+      ); // All within ±30min of median
     });
 
     test('consistency ignores nights after reference date', () async {

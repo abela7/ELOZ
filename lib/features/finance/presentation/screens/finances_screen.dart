@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../../core/theme/dark_gradient.dart';
 import '../../../../core/widgets/date_navigator_widget.dart';
+import '../../finance_module.dart';
 import '../../data/models/transaction.dart';
 import '../../data/models/account.dart';
 import '../providers/finance_providers.dart';
@@ -12,6 +15,8 @@ import '../../utils/currency_utils.dart';
 import 'finance_settings_screen.dart';
 import 'accounts_screen.dart';
 import 'add_transaction_screen.dart';
+import 'add_bill_screen.dart';
+import 'add_recurring_income_screen.dart';
 import 'budgets_screen.dart';
 import 'debts_screen.dart';
 import 'expenses_screen.dart';
@@ -30,6 +35,8 @@ class FinancesScreen extends ConsumerStatefulWidget {
 }
 
 class _FinancesScreenState extends ConsumerState<FinancesScreen> {
+  static const Duration _openTimeout = Duration(seconds: 12);
+
   // Initialize to midnight today for consistent date filtering
   DateTime _selectedDate = DateTime(
     DateTime.now().year,
@@ -44,54 +51,114 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
       'all'; // Filter: 'all', 'income', 'expense', 'transfer'
 
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  bool _showFab = false;
 
   /// Whether the security gate has been passed for this screen instance.
   bool _authenticated = false;
   bool _authCheckDone = false;
+  String? _startupError;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _checkAccess());
+    _scrollController.addListener(_onScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openFinance());
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final atBottom = pos.pixels >= pos.maxScrollExtent - 80 || pos.maxScrollExtent <= 0;
+    if (_showFab != atBottom && mounted) {
+      setState(() => _showFab = atBottom);
+    }
+  }
+
+  Future<void> _openFinance() async {
+    if (mounted) {
+      setState(() {
+        _startupError = null;
+        _authCheckDone = false;
+        _authenticated = false;
+      });
+    }
+
+    try {
+      await FinanceModule.init(
+        deferRecurringProcessing: true,
+        preOpenBoxes: true,
+        bootstrapDefaults: true,
+      ).timeout(_openTimeout);
+
+      if (!mounted) return;
+      await _checkAccess();
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() {
+        _startupError = 'Finance took too long to initialize. Please retry.';
+        _authCheckDone = true;
+        _authenticated = false;
+      });
+    } catch (e) {
+      debugPrint('Finance open failed: $e');
+      if (!mounted) return;
+      setState(() {
+        _startupError = 'Could not initialize Finance securely. Please retry.';
+        _authCheckDone = true;
+        _authenticated = false;
+      });
+    }
   }
 
   Future<void> _checkAccess() async {
     final guard = ref.read(financeAccessGuardProvider);
 
-    // If already unlocked from a previous session, skip the dialog.
-    if (guard.isSessionUnlocked) {
-      if (mounted) {
+    try {
+      // If already unlocked from a previous session, skip the dialog.
+      if (guard.isSessionUnlocked) {
+        if (mounted) {
+          setState(() {
+            _authenticated = true;
+            _authCheckDone = true;
+          });
+        }
+        return;
+      }
+
+      final ok = await guard.ensureAccess(context);
+      if (!mounted) return;
+
+      if (ok) {
         setState(() {
           _authenticated = true;
           _authCheckDone = true;
         });
+      } else {
+        setState(() {
+          _authenticated = false;
+          _authCheckDone = true;
+        });
+        // Pop back if the user cancelled or was denied.
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
       }
-      return;
-    }
-
-    final ok = await guard.ensureAccess(context);
-    if (!mounted) return;
-
-    if (ok) {
+    } catch (e) {
+      debugPrint('Finance unlock failed: $e');
+      if (!mounted) return;
       setState(() {
-        _authenticated = true;
-        _authCheckDone = true;
-      });
-    } else {
-      setState(() {
+        _startupError = 'Finance unlock failed. Please retry.';
         _authenticated = false;
         _authCheckDone = true;
       });
-      // Pop back if the user cancelled or was denied.
-      if (mounted && Navigator.of(context).canPop()) {
-        Navigator.of(context).pop();
-      }
     }
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -110,9 +177,23 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
       );
     }
 
-    // If authentication failed, show blank (will pop shortly).
+    if (_startupError != null) {
+      return Scaffold(
+        body: isDark
+            ? DarkGradient.wrap(
+                child: _buildStartupErrorState(context, isDark, _startupError!),
+              )
+            : _buildStartupErrorState(context, isDark, _startupError!),
+      );
+    }
+
+    // If authentication failed, keep a secure locked state.
     if (!_authenticated) {
-      return const Scaffold(body: SizedBox.shrink());
+      return Scaffold(
+        body: isDark
+            ? DarkGradient.wrap(child: _buildLockedState(context, isDark))
+            : _buildLockedState(context, isDark),
+      );
     }
 
     // Normalize date to midnight for provider key
@@ -199,11 +280,136 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
             if (_isSearching && _searchController.text.isNotEmpty) {
               return _buildSearchResults(context, isDark, transactions);
             }
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _scrollController.hasClients) _onScroll();
+            });
             return _buildFinanceContent(context, isDark, transactions);
           },
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, stack) =>
-              Center(child: Text('Error loading transactions: $error')),
+          error: (error, stack) => _buildLoadErrorState(
+            context,
+            isDark,
+            'Error loading transactions: $error',
+          ),
+        ),
+      ),
+      floatingActionButton: _showFab && !_isSearching
+          ? FloatingActionButton.extended(
+              onPressed: () => _showFinanceActionSheet(context, isDark),
+              backgroundColor: const Color(0xFFCDAF56),
+              foregroundColor: const Color(0xFF1E1E1E),
+              icon: const Icon(Icons.apps_rounded),
+              label: const Text('Add'),
+            )
+          : null,
+    );
+  }
+
+  Widget _buildStartupErrorState(
+    BuildContext context,
+    bool isDark,
+    String message,
+  ) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.error_outline_rounded,
+              size: 44,
+              color: isDark ? Colors.white70 : Colors.black54,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.45,
+                color: isDark ? Colors.white70 : Colors.black54,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _openFinance,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLockedState(BuildContext context, bool isDark) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.lock_outline_rounded,
+              size: 44,
+              color: isDark ? Colors.white70 : Colors.black54,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Finance is locked.',
+              style: TextStyle(
+                fontSize: 15,
+                color: isDark ? Colors.white70 : Colors.black54,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: _openFinance,
+              icon: const Icon(Icons.lock_open_rounded),
+              label: const Text('Unlock'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadErrorState(
+    BuildContext context,
+    bool isDark,
+    String message,
+  ) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: isDark ? Colors.white70 : Colors.black54,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: () {
+                final date = DateTime(
+                  _selectedDate.year,
+                  _selectedDate.month,
+                  _selectedDate.day,
+                );
+                ref.invalidate(transactionsForDateProvider(date));
+              },
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Retry'),
+            ),
+          ],
         ),
       ),
     );
@@ -371,6 +577,7 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
         }
       },
       child: ListView(
+        controller: _scrollController,
         padding: const EdgeInsets.only(bottom: 100),
         children: [
           // Date Navigator Widget
@@ -1234,6 +1441,58 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
 
           const SizedBox(height: 24),
         ],
+      ),
+    );
+  }
+
+  /// Opens a bottom sheet with quick actions: add expense, income, payment, etc.
+  void _showFinanceActionSheet(BuildContext context, bool isDark) {
+    HapticFeedback.lightImpact();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Container(
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1A1D24) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Quick Actions',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () => Navigator.pop(sheetContext),
+                      tooltip: 'Close',
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                child: _FinanceActionGrid(
+                  isDark: isDark,
+                  navigatorContext: context,
+                  onClose: () => Navigator.pop(sheetContext),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2561,6 +2820,104 @@ class _QuickActionButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Action-oriented grid for the FAB: Add Expense, Add Payment, Add Balance, etc.
+class _FinanceActionGrid extends StatelessWidget {
+  final bool isDark;
+  final BuildContext navigatorContext;
+  final VoidCallback onClose;
+
+  const _FinanceActionGrid({
+    required this.isDark,
+    required this.navigatorContext,
+    required this.onClose,
+  });
+
+  void _navigate(Widget screen) {
+    onClose();
+    Navigator.of(navigatorContext).push(
+      MaterialPageRoute(builder: (_) => screen),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const gold = Color(0xFFCDAF56);
+    final textColor = isDark ? Colors.white : Colors.black87;
+
+    final actions = <_ActionItem>[
+      _ActionItem('Add Expense', Icons.trending_down_rounded, () => _navigate(const AddTransactionScreen(initialType: 'expense'))),
+      _ActionItem('Add Income', Icons.trending_up_rounded, () => _navigate(const AddTransactionScreen(initialType: 'income'))),
+      _ActionItem('Add Balance (Fund)', Icons.account_balance_wallet_rounded, () => _navigate(const AddTransactionScreen(initialType: 'income'))),
+      _ActionItem('Add Payment', Icons.payments_rounded, () => _navigate(const AddTransactionScreen(initialType: 'expense'))),
+      _ActionItem('Add Transfer', Icons.swap_horiz_rounded, () => _navigate(const AddTransactionScreen(initialType: 'transfer'))),
+      _ActionItem('Add Bill', Icons.receipt_long_rounded, () => _navigate(const AddBillScreen())),
+      _ActionItem('Add Recurring Income', Icons.repeat_rounded, () => _navigate(const AddRecurringIncomeScreen())),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 10.0;
+        final itemWidth = (constraints.maxWidth - spacing) / 2;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: actions.map((item) {
+            return SizedBox(
+              width: itemWidth,
+              child: Material(
+                color: isDark ? Colors.white.withOpacity(0.06) : Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(14),
+                child: InkWell(
+                  onTap: () {
+                    HapticFeedback.lightImpact();
+                    item.onTap();
+                  },
+                  borderRadius: BorderRadius.circular(14),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: gold.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(item.icon, color: gold, size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            item.label,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: textColor,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+}
+
+class _ActionItem {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  _ActionItem(this.label, this.icon, this.onTap);
 }
 
 /// Transaction Card Widget

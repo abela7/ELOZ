@@ -1833,13 +1833,6 @@ class NotificationService {
     }
     await _clearTrackedSpecialAlarmIds(taskId);
 
-    // Inform the Hub that all task reminders were cancelled.
-    unawaited(NotificationActivityLogger().logCancelled(
-      moduleId: 'task',
-      entityId: taskId,
-      metadata: <String, dynamic>{'cancelledCount': cancelled},
-    ));
-
     print(
       '🔔 NotificationService: Cancelled $cancelled pending reminders for task $taskId',
     );
@@ -1886,13 +1879,6 @@ class NotificationService {
       await AlarmService().cancelAlarm(alarmId);
     }
     await _clearTrackedSpecialAlarmIds(habitId);
-
-    // Inform the Hub that all habit reminders were cancelled.
-    unawaited(NotificationActivityLogger().logCancelled(
-      moduleId: 'habit',
-      entityId: habitId,
-      metadata: <String, dynamic>{'cancelledCount': cancelled},
-    ));
 
     print(
       '🔔 NotificationService: Cancelled $cancelled pending reminders for habit $habitId',

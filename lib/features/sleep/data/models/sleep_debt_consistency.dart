@@ -4,6 +4,7 @@
 /// - Debt: only main sleep (isNap=false) counts. Missing night = full target.
 /// - 7-day window: Mon-Sun week containing reference date.
 /// - Debt accumulates from Monday through reference date only (ongoing).
+/// - Extra sleep repays debt, but debt never goes below zero.
 /// - Consistency: % of nights within ±30min of median bedtime; min 2 nights.
 class SleepDebtConsistency {
   /// Debt for the selected/reference date's night (minutes). Null when future.

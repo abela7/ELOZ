@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
-import '../../../../core/notifications/models/notification_hub_modules.dart';
 import '../../../../core/notifications/notifications.dart';
 import '../../../../core/theme/color_schemes.dart';
 import '../../../finance/notifications/finance_notification_contract.dart';
 import '../../../sleep/notifications/sleep_notification_contract.dart';
+import '../utils/notifications_paging.dart';
 import '../widgets/scheduled_notification_detail_sheet.dart';
 
 /// Formats unknown section IDs for display (e.g. "recurring_income" -> "Recurring Income").
@@ -14,8 +14,10 @@ String _formatSectionIdForDisplay(String sectionId) {
   if (sectionId.isEmpty) return '';
   return sectionId
       .split(RegExp(r'[_\s]+'))
-      .map((p) =>
-          p.isEmpty ? '' : p[0].toUpperCase() + p.substring(1).toLowerCase())
+      .map(
+        (p) =>
+            p.isEmpty ? '' : p[0].toUpperCase() + p.substring(1).toLowerCase(),
+      )
       .join(' ');
 }
 
@@ -35,9 +37,46 @@ class HubUnifiedNotificationsPage extends StatefulWidget {
 
 class _HubUnifiedNotificationsPageState
     extends State<HubUnifiedNotificationsPage> {
+  static const int _pageSize = 60;
+
   int _refreshKey = 0;
   String? _filterModuleId;
   String? _filterSection;
+  final ScrollController _scrollController = ScrollController();
+  int _visibleCount = NotificationsPaging.initialVisible(pageSize: _pageSize);
+  Future<List<Map<String, dynamic>>>? _notificationsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    _notificationsFuture = _loadNotifications();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    if (position.maxScrollExtent <= 0) return;
+    if (position.pixels < position.maxScrollExtent - 240) return;
+
+    setState(() {
+      _visibleCount = NotificationsPaging.nextVisible(
+        _visibleCount,
+        pageSize: _pageSize,
+      );
+    });
+  }
+
+  void _resetPaging() {
+    _visibleCount = NotificationsPaging.initialVisible(pageSize: _pageSize);
+  }
 
   Future<List<Map<String, dynamic>>> _loadNotifications() async {
     final hub = NotificationHub();
@@ -119,8 +158,7 @@ class _HubUnifiedNotificationsPageState
       } else {
         groupKey = entityId.isNotEmpty ? entityId : 'single:${n.hashCode}';
         groupLabel =
-            _entityNameFromTitle(title) ??
-            hub.moduleDisplayName(moduleId);
+            _entityNameFromTitle(title) ?? hub.moduleDisplayName(moduleId);
       }
 
       entityMap
@@ -164,7 +202,10 @@ class _HubUnifiedNotificationsPageState
       NotificationHubModuleIds.habit,
       NotificationHubModuleIds.sleep,
     ];
-    final registered = hub.getRegisteredModules().map((m) => m.moduleId).toList();
+    final registered = hub
+        .getRegisteredModules()
+        .map((m) => m.moduleId)
+        .toList();
     final moduleOrder = [
       ...knownOrder.where(registered.contains),
       ...registered.where((id) => !knownOrder.contains(id)),
@@ -218,7 +259,9 @@ class _HubUnifiedNotificationsPageState
           return aFirst.compareTo(bFirst);
         });
         if (!singleSection) {
-          result.add(_HierarchicalItem.sectionHeader(section: sec, moduleId: mid));
+          result.add(
+            _HierarchicalItem.sectionHeader(section: sec, moduleId: mid),
+          );
         }
         for (final eg in entityGroups) {
           result.add(_HierarchicalItem.entityGroup(group: eg));
@@ -304,7 +347,7 @@ class _HubUnifiedNotificationsPageState
       ),
       body: FutureBuilder<List<Map<String, dynamic>>>(
         key: ValueKey(_refreshKey),
-        future: _loadNotifications(),
+        future: _notificationsFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator.adaptive());
@@ -345,8 +388,9 @@ class _HubUnifiedNotificationsPageState
                     Icon(
                       Icons.notifications_none_rounded,
                       size: 64,
-                      color: (isDark ? Colors.white : Colors.black)
-                          .withOpacity(0.2),
+                      color: (isDark ? Colors.white : Colors.black).withValues(
+                        alpha: 0.2,
+                      ),
                     ),
                     const SizedBox(height: 16),
                     Text(
@@ -371,7 +415,16 @@ class _HubUnifiedNotificationsPageState
           }
 
           final filtered = _applyFilter(all);
-          final items = _groupNotifications(filtered, hub);
+          final visibleCount = NotificationsPaging.clampVisible(
+            totalCount: filtered.length,
+            requestedVisible: _visibleCount,
+          );
+          final visibleNotifications = filtered.take(visibleCount).toList();
+          final items = _groupNotifications(visibleNotifications, hub);
+          final hasMore = NotificationsPaging.hasMore(
+            totalCount: filtered.length,
+            visibleCount: visibleCount,
+          );
 
           if (filtered.isEmpty) {
             return Column(
@@ -386,8 +439,12 @@ class _HubUnifiedNotificationsPageState
                   onModuleChanged: (id) => setState(() {
                     _filterModuleId = id;
                     _filterSection = null;
+                    _resetPaging();
                   }),
-                  onSectionChanged: (id) => setState(() => _filterSection = id),
+                  onSectionChanged: (id) => setState(() {
+                    _filterSection = id;
+                    _resetPaging();
+                  }),
                 ),
                 Expanded(
                   child: Center(
@@ -400,7 +457,7 @@ class _HubUnifiedNotificationsPageState
                             Icons.filter_list_rounded,
                             size: 64,
                             color: (isDark ? Colors.white : Colors.black)
-                                .withOpacity(0.2),
+                                .withValues(alpha: 0.2),
                           ),
                           const SizedBox(height: 16),
                           Text(
@@ -415,6 +472,7 @@ class _HubUnifiedNotificationsPageState
                             onPressed: () => setState(() {
                               _filterModuleId = null;
                               _filterSection = null;
+                              _resetPaging();
                             }),
                             icon: const Icon(Icons.clear_all_rounded, size: 18),
                             label: const Text('Clear filters'),
@@ -441,22 +499,45 @@ class _HubUnifiedNotificationsPageState
                 onModuleChanged: (id) => setState(() {
                   _filterModuleId = id;
                   _filterSection = null;
+                  _resetPaging();
                 }),
-                onSectionChanged: (id) => setState(() => _filterSection = id),
+                onSectionChanged: (id) => setState(() {
+                  _filterSection = id;
+                  _resetPaging();
+                }),
               ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
                     HapticFeedback.mediumImpact();
-                    setState(() => _refreshKey++);
+                    setState(() {
+                      _refreshKey++;
+                      _notificationsFuture = _loadNotifications();
+                      _resetPaging();
+                    });
                   },
                   child: ListView.builder(
+                    controller: _scrollController,
                     physics: const AlwaysScrollableScrollPhysics(
                       parent: BouncingScrollPhysics(),
                     ),
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-                    itemCount: items.length,
+                    itemCount: items.length + (hasMore ? 1 : 0),
                     itemBuilder: (context, index) {
+                      if (index >= items.length) {
+                        final remaining = filtered.length - visibleCount;
+                        return _LoadMoreHint(
+                          remainingCount: remaining,
+                          isDark: isDark,
+                          onTap: () => setState(() {
+                            _visibleCount = NotificationsPaging.nextVisible(
+                              _visibleCount,
+                              pageSize: _pageSize,
+                            );
+                          }),
+                        );
+                      }
+
                       final item = items[index];
                       if (item.isModuleHeader) {
                         return _ModuleHeader(
@@ -486,7 +567,11 @@ class _HubUnifiedNotificationsPageState
                             notif: notif,
                             hub: hub,
                             isDark: isDark,
-                            onDeleted: () => setState(() => _refreshKey++),
+                            onDeleted: () => setState(() {
+                              _refreshKey++;
+                              _notificationsFuture = _loadNotifications();
+                              _resetPaging();
+                            }),
                           );
                         },
                       );
@@ -534,8 +619,7 @@ class _HierarchicalItem {
   factory _HierarchicalItem.sectionHeader({
     required String section,
     required String moduleId,
-  }) =>
-      _HierarchicalItem._(section: section, moduleId: moduleId);
+  }) => _HierarchicalItem._(section: section, moduleId: moduleId);
 
   factory _HierarchicalItem.entityGroup({required _NotificationGroup group}) =>
       _HierarchicalItem._(group: group);
@@ -566,7 +650,7 @@ class _ModuleHeader extends StatelessWidget {
           fontSize: 12,
           fontWeight: FontWeight.w800,
           letterSpacing: 1.2,
-          color: theme.colorScheme.onSurfaceVariant.withOpacity(0.9),
+          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.9),
         ),
       ),
     );
@@ -603,7 +687,9 @@ class _SectionHeader extends StatelessWidget {
         style: TextStyle(
           fontSize: 13,
           fontWeight: FontWeight.w700,
-          color: AppColorSchemes.primaryGold.withOpacity(isDark ? 0.9 : 0.85),
+          color: AppColorSchemes.primaryGold.withValues(
+            alpha: isDark ? 0.9 : 0.85,
+          ),
         ),
       ),
     );
@@ -682,7 +768,7 @@ class _FilterBar extends StatelessWidget {
               fontSize: 11,
               fontWeight: FontWeight.w800,
               letterSpacing: 1,
-              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
             ),
           ),
           const SizedBox(height: 8),
@@ -698,7 +784,9 @@ class _FilterBar extends StatelessWidget {
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 1,
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+                color: theme.colorScheme.onSurfaceVariant.withValues(
+                  alpha: 0.8,
+                ),
               ),
             ),
             const SizedBox(height: 8),
@@ -720,7 +808,11 @@ class _FilterBar extends StatelessWidget {
                     onTap: () => onSectionChanged(null),
                   ),
                   ...sections.entries.where((e) => e.key != 'other').map((e) {
-                    final label = _sectionDisplayLabel(hub, filterModuleId!, e.key);
+                    final label = _sectionDisplayLabel(
+                      hub,
+                      filterModuleId!,
+                      e.key,
+                    );
                     return Padding(
                       padding: const EdgeInsets.only(left: 8),
                       child: _FilterChip(
@@ -803,6 +895,42 @@ class _FilterBar extends StatelessWidget {
   }
 }
 
+class _LoadMoreHint extends StatelessWidget {
+  final int remainingCount;
+  final bool isDark;
+  final VoidCallback onTap;
+
+  const _LoadMoreHint({
+    required this.remainingCount,
+    required this.isDark,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Center(
+        child: TextButton.icon(
+          onPressed: onTap,
+          icon: const Icon(Icons.expand_more_rounded),
+          label: Text(
+            remainingCount > 0
+                ? 'Load more ($remainingCount remaining)'
+                : 'Load more',
+          ),
+          style: TextButton.styleFrom(
+            foregroundColor: isDark
+                ? Colors.white.withValues(alpha: 0.8)
+                : theme.colorScheme.primary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _FilterChip extends StatelessWidget {
   final String label;
   final int count;
@@ -830,13 +958,17 @@ class _FilterChip extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
           color: isSelected
-              ? AppColorSchemes.primaryGold.withOpacity(isDark ? 0.25 : 0.2)
-              : (isDark ? Colors.white : Colors.black).withOpacity(0.05),
+              ? AppColorSchemes.primaryGold.withValues(
+                  alpha: isDark ? 0.25 : 0.2,
+                )
+              : (isDark ? Colors.white : Colors.black).withValues(alpha: 0.05),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected
-                ? AppColorSchemes.primaryGold.withOpacity(0.6)
-                : (isDark ? Colors.white : Colors.black).withOpacity(0.08),
+                ? AppColorSchemes.primaryGold.withValues(alpha: 0.6)
+                : (isDark ? Colors.white : Colors.black).withValues(
+                    alpha: 0.08,
+                  ),
           ),
         ),
         child: Row(
@@ -860,7 +992,9 @@ class _FilterChip extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
-                color: (isDark ? Colors.white : Colors.black).withOpacity(0.1),
+                color: (isDark ? Colors.white : Colors.black).withValues(
+                  alpha: 0.1,
+                ),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
@@ -920,8 +1054,8 @@ class _GroupCardState extends State<_GroupCard> {
     final cardBg = isDark
         ? theme.colorScheme.surfaceContainerLow
         : theme.colorScheme.surfaceContainerHighest;
-    final border = (isDark ? Colors.white : Colors.black).withOpacity(
-      isDark ? 0.08 : 0.06,
+    final border = (isDark ? Colors.white : Colors.black).withValues(
+      alpha: isDark ? 0.08 : 0.06,
     );
 
     final sectionLabel = _sectionLabel(hub, group.moduleId, group.section);
@@ -989,7 +1123,7 @@ class _GroupCardState extends State<_GroupCard> {
                             ? Icons.keyboard_arrow_up_rounded
                             : Icons.keyboard_arrow_down_rounded,
                         color: (isDark ? Colors.white : Colors.black)
-                            .withOpacity(0.5),
+                            .withValues(alpha: 0.5),
                         size: 24,
                       ),
                   ],
@@ -997,103 +1131,105 @@ class _GroupCardState extends State<_GroupCard> {
               ),
             ),
             if (expanded) ...[
-            Divider(
-              height: 1,
-              thickness: 1,
-              color: border,
-              indent: 16,
-              endIndent: 16,
-            ),
-            ...group.notifications.asMap().entries.map((entry) {
-              final idx = entry.key;
-              final notif = entry.value;
-              final isLast = idx == group.notifications.length - 1;
-              final title = notif['title'] as String? ?? 'Notification';
-              final body = notif['body'] as String? ?? '';
-              final scheduledAt = notif['scheduledAt'] as DateTime?;
-              final timeStr = scheduledAt != null
-                  ? DateFormat('HH:mm').format(scheduledAt)
-                  : '—';
-              final relativeStr = scheduledAt != null
-                  ? _relativeTime(scheduledAt)
-                  : '';
+              Divider(
+                height: 1,
+                thickness: 1,
+                color: border,
+                indent: 16,
+                endIndent: 16,
+              ),
+              ...group.notifications.asMap().entries.map((entry) {
+                final idx = entry.key;
+                final notif = entry.value;
+                final isLast = idx == group.notifications.length - 1;
+                final title = notif['title'] as String? ?? 'Notification';
+                final body = notif['body'] as String? ?? '';
+                final scheduledAt = notif['scheduledAt'] as DateTime?;
+                final timeStr = scheduledAt != null
+                    ? DateFormat('HH:mm').format(scheduledAt)
+                    : '—';
+                final relativeStr = scheduledAt != null
+                    ? _relativeTime(scheduledAt)
+                    : '';
 
-              return Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => onNotificationTap(notif),
-                  borderRadius: isLast
-                      ? const BorderRadius.vertical(bottom: Radius.circular(16))
-                      : BorderRadius.zero,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          width: 56,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                timeStr,
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColorSchemes.primaryGold,
-                                ),
-                              ),
-                              if (relativeStr.isNotEmpty) ...[
-                                const SizedBox(height: 2),
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => onNotificationTap(notif),
+                    borderRadius: isLast
+                        ? const BorderRadius.vertical(
+                            bottom: Radius.circular(16),
+                          )
+                        : BorderRadius.zero,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 56,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
                                 Text(
-                                  relativeStr,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                    fontSize: 10,
+                                  timeStr,
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColorSchemes.primaryGold,
                                   ),
                                 ),
+                                if (relativeStr.isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    relativeStr,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ],
                               ],
-                            ],
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                title,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              if (body.isNotEmpty) ...[
-                                const SizedBox(height: 2),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
                                 Text(
-                                  body,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
+                                  title,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
                                   ),
-                                  maxLines: 1,
+                                  maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
                                 ),
+                                if (body.isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    body,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
                               ],
-                            ],
+                            ),
                           ),
-                        ),
-                        Icon(
-                          Icons.chevron_right_rounded,
-                          size: 20,
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ],
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            size: 20,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              );
-            }),
+                );
+              }),
             ],
           ],
         ),
@@ -1125,7 +1261,9 @@ class _CategoryChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: AppColorSchemes.primaryGold.withOpacity(isDark ? 0.15 : 0.12),
+        color: AppColorSchemes.primaryGold.withValues(
+          alpha: isDark ? 0.15 : 0.12,
+        ),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(

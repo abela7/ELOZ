@@ -1,5 +1,6 @@
 import 'package:hive_flutter/hive_flutter.dart';
 
+import '../../../data/local/hive/hive_service.dart';
 import '../models/universal_notification.dart';
 
 /// Repository for Universal Notifications created via the Universal Creator.
@@ -17,7 +18,7 @@ class UniversalNotificationRepository {
       Hive.registerAdapter(UniversalNotificationAdapter());
     }
 
-    _box = await Hive.openBox<UniversalNotification>(_boxName);
+    _box = await HiveService.getBox<UniversalNotification>(_boxName);
   }
 
   Box<UniversalNotification> get _safeBox {

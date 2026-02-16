@@ -6,12 +6,39 @@ class SleepDebtReportService {
   final SleepRecordRepository _repository;
 
   SleepDebtReportService({required SleepRecordRepository repository})
-      : _repository = repository;
+    : _repository = repository;
 
   /// Returns Monday 00:00 of the week containing [date].
   static DateTime _mondayOfWeek(DateTime date) {
     final d = DateTime(date.year, date.month, date.day);
     return d.subtract(Duration(days: d.weekday - 1));
+  }
+
+  static int _dailyDeltaMinutes(DailyDebtEntry e) {
+    // Positive = debt added, negative = debt repaid.
+    return e.targetMinutes - e.actualMinutes;
+  }
+
+  static int _rollingDebtMinutes(
+    List<DailyDebtEntry> entries, {
+    int initialDebtMinutes = 0,
+  }) {
+    var debt = initialDebtMinutes;
+    final sorted = [...entries]..sort((a, b) => a.date.compareTo(b.date));
+    for (final e in sorted) {
+      debt += _dailyDeltaMinutes(e);
+      if (debt < 0) debt = 0;
+    }
+    return debt;
+  }
+
+  Future<DateTime?> _firstMainSleepDate() async {
+    final records = await _repository.getMainSleepRecords();
+    if (records.isEmpty) return null;
+
+    records.sort((a, b) => a.bedTime.compareTo(b.bedTime));
+    final first = records.first.bedTime;
+    return DateTime(first.year, first.month, first.day);
   }
 
   /// Daily debt breakdown for [start] to [end]. Only past/today days count.
@@ -26,7 +53,10 @@ class SleepDebtReportService {
     final startDate = DateTime(start.year, start.month, start.day);
     final endDate = DateTime(end.year, end.month, end.day);
 
-    final mainSleep = await _repository.getMainSleepByDateRange(startDate, endDate);
+    final mainSleep = await _repository.getMainSleepByDateRange(
+      startDate,
+      endDate,
+    );
     final Map<DateTime, int> minutesByDate = {};
     for (final r in mainSleep) {
       final d = DateTime(r.bedTime.year, r.bedTime.month, r.bedTime.day);
@@ -44,13 +74,15 @@ class SleepDebtReportService {
           ? (targetMinutes - actual).clamp(0, targetMinutes)
           : targetMinutes;
 
-      entries.add(DailyDebtEntry(
-        date: d,
-        debtMinutes: debt,
-        actualMinutes: actual,
-        targetMinutes: targetMinutes,
-        hadData: actual > 0,
-      ));
+      entries.add(
+        DailyDebtEntry(
+          date: d,
+          debtMinutes: debt,
+          actualMinutes: actual,
+          targetMinutes: targetMinutes,
+          hadData: actual > 0,
+        ),
+      );
       d = d.add(const Duration(days: 1));
     }
     return entries;
@@ -62,7 +94,11 @@ class SleepDebtReportService {
     required DateTime end,
     required double targetHours,
   }) async {
-    final daily = await getDailyBreakdown(start: start, end: end, targetHours: targetHours);
+    final daily = await getDailyBreakdown(
+      start: start,
+      end: end,
+      targetHours: targetHours,
+    );
     if (daily.isEmpty) return [];
 
     final weekMap = <int, List<DailyDebtEntry>>{};
@@ -79,7 +115,7 @@ class SleepDebtReportService {
         e.value.first.date.day,
       );
       final mon = _mondayOfWeek(weekStart);
-      final debt = e.value.fold<int>(0, (s, d) => s + d.debtMinutes);
+      final debt = _rollingDebtMinutes(e.value);
       final withData = e.value.where((d) => d.hadData).length;
       final missing = e.value.where((d) => !d.hadData).length;
 
@@ -89,8 +125,7 @@ class SleepDebtReportService {
         nightsWithData: withData,
         nightsMissing: missing,
       );
-    }).toList()
-      ..sort((a, b) => a.weekStart.compareTo(b.weekStart));
+    }).toList()..sort((a, b) => a.weekStart.compareTo(b.weekStart));
   }
 
   /// Monthly debt for months in [start]–[end].
@@ -99,7 +134,11 @@ class SleepDebtReportService {
     required DateTime end,
     required double targetHours,
   }) async {
-    final daily = await getDailyBreakdown(start: start, end: end, targetHours: targetHours);
+    final daily = await getDailyBreakdown(
+      start: start,
+      end: end,
+      targetHours: targetHours,
+    );
     if (daily.isEmpty) return [];
 
     final monthMap = <int, List<DailyDebtEntry>>{};
@@ -111,7 +150,7 @@ class SleepDebtReportService {
     return monthMap.entries.map((e) {
       final year = e.key ~/ 100;
       final month = e.key % 100;
-      final debt = e.value.fold<int>(0, (s, d) => s + d.debtMinutes);
+      final debt = _rollingDebtMinutes(e.value);
       final withData = e.value.where((d) => d.hadData).length;
       final lastDay = DateTime(year, month + 1, 0).day;
 
@@ -122,11 +161,10 @@ class SleepDebtReportService {
         nightsWithData: withData,
         nightsInMonth: lastDay,
       );
-    }).toList()
-      ..sort((a, b) {
-        if (a.year != b.year) return a.year.compareTo(b.year);
-        return a.month.compareTo(b.month);
-      });
+    }).toList()..sort((a, b) {
+      if (a.year != b.year) return a.year.compareTo(b.year);
+      return a.month.compareTo(b.month);
+    });
   }
 
   /// Yearly debt for years in [start]–[end].
@@ -135,7 +173,11 @@ class SleepDebtReportService {
     required DateTime end,
     required double targetHours,
   }) async {
-    final daily = await getDailyBreakdown(start: start, end: end, targetHours: targetHours);
+    final daily = await getDailyBreakdown(
+      start: start,
+      end: end,
+      targetHours: targetHours,
+    );
     if (daily.isEmpty) return [];
 
     final yearMap = <int, List<DailyDebtEntry>>{};
@@ -144,7 +186,7 @@ class SleepDebtReportService {
     }
 
     return yearMap.entries.map((e) {
-      final debt = e.value.fold<int>(0, (s, d) => s + d.debtMinutes);
+      final debt = _rollingDebtMinutes(e.value);
       final withData = e.value.where((d) => d.hadData).length;
 
       return YearlyDebtEntry(
@@ -152,33 +194,23 @@ class SleepDebtReportService {
         debtMinutes: debt,
         nightsWithData: withData,
       );
-    }).toList()
-      ..sort((a, b) => a.year.compareTo(b.year));
+    }).toList()..sort((a, b) => a.year.compareTo(b.year));
   }
 
   /// All-time total debt. Uses records from inception to today.
   /// Processes year-by-year to avoid loading years of data at once.
-  Future<int> getAllTimeDebtMinutes({
-    required double targetHours,
-  }) async {
-    var total = 0;
-    final endOfThisYear = DateTime.now();
-    var year = 2020; // Reasonable early bound
+  Future<int> getAllTimeDebtMinutes({required double targetHours}) async {
+    final first = await _firstMainSleepDate();
+    if (first == null) return 0;
 
-    while (year <= endOfThisYear.year) {
-      final start = DateTime(year, 1, 1);
-      final end = year < endOfThisYear.year
-          ? DateTime(year, 12, 31)
-          : endOfThisYear;
-      final daily = await getDailyBreakdown(
-        start: start,
-        end: end,
-        targetHours: targetHours,
-      );
-      total += daily.fold<int>(0, (s, e) => s + e.debtMinutes);
-      year++;
-    }
-    return total;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final daily = await getDailyBreakdown(
+      start: first,
+      end: today,
+      targetHours: targetHours,
+    );
+    return _rollingDebtMinutes(daily);
   }
 
   /// All-time yearly breakdown for robust all-time report.
@@ -187,11 +219,15 @@ class SleepDebtReportService {
     required double targetHours,
   }) async {
     final entries = <YearlyDebtEntry>[];
+    final first = await _firstMainSleepDate();
+    if (first == null) return entries;
+
     final endOfThisYear = DateTime.now();
-    var year = 2020;
+    var year = first.year;
 
     while (year <= endOfThisYear.year) {
-      final start = DateTime(year, 1, 1);
+      final startOfYear = DateTime(year, 1, 1);
+      final start = startOfYear.isBefore(first) ? first : startOfYear;
       final end = year < endOfThisYear.year
           ? DateTime(year, 12, 31)
           : endOfThisYear;

@@ -80,9 +80,27 @@ class NotificationHubLogStore {
       }
     }
 
-    final removed = entries.length - compacted.length;
+    var removed = entries.length - compacted.length;
     if (removed > 0) {
       await _save(compacted);
+    }
+    removed += await purgeLegacyCancelEntries();
+    return removed;
+  }
+
+  /// Removes cancelled entries with source 'legacy_cancel' (task/habit bulk
+  /// cancels). These add noise and aren't user-actionable.
+  Future<int> purgeLegacyCancelEntries() async {
+    final entries = await getAll();
+    final kept = entries
+        .where((e) {
+          if (e.event != NotificationLifecycleEvent.cancelled) return true;
+          return e.metadata['source'] != 'legacy_cancel';
+        })
+        .toList();
+    final removed = entries.length - kept.length;
+    if (removed > 0) {
+      await _save(kept);
     }
     return removed;
   }

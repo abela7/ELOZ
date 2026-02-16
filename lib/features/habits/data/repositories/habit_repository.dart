@@ -1,4 +1,8 @@
+import 'dart:isolate';
+
+import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import '../../../../core/data/history_optimization_models.dart';
 import '../../../../data/local/hive/hive_service.dart';
 import '../models/habit.dart';
 import '../models/habit_completion.dart';
@@ -12,13 +16,42 @@ class HabitRepository {
       QuitHabitSecureStorageService.secureHabitsBoxName;
   static const String secureQuitCompletionsBoxName =
       QuitHabitSecureStorageService.secureCompletionsBoxName;
+  static const String _regularCompletionsDateIndexBoxName =
+      'habit_completions_date_index_v1';
+  static const String _regularCompletionsHabitIndexBoxName =
+      'habit_completions_habit_index_v1';
+  static const String _habitDailySummaryBoxName = 'habit_daily_summary_v1';
+  static const String _regularCompletionsIndexMetaBoxName =
+      'habit_completions_index_meta_v1';
+  static const String _rebuildNeededMetaKey = 'rebuild_needed';
+  static const String _indexedFromMetaKey = 'indexed_from_date_key';
+  static const String _oldestDataMetaKey = 'oldest_data_date_key';
+  static const String _lastIndexedMetaKey = 'last_indexed_date_key';
+  static const String _backfillCompleteMetaKey = 'backfill_complete';
+  static const String _backfillPausedMetaKey = 'backfill_paused';
+  static const int _bootstrapWindowDays = 30;
+  static const int _defaultBackfillChunkDays = 30;
+  static const int _sessionScanYieldInterval = 450;
+  static const int _regularCompletionsIndexVersion = 1;
 
   /// Cached box references for performance
   Box<Habit>? _habitsBox;
   Box<HabitCompletion>? _completionsBox;
   Box<Habit>? _quitHabitsBox;
   Box<HabitCompletion>? _quitCompletionsBox;
+  Box<dynamic>? _regularCompletionsDateIndexBox;
+  Box<dynamic>? _regularCompletionsHabitIndexBox;
+  Box<dynamic>? _habitDailySummaryBox;
+  Box<dynamic>? _regularCompletionsIndexMetaBox;
+  bool _regularCompletionIndexesReady = false;
+  bool _regularCompletionIntegrityChecked = false;
+  bool _useRegularCompletionIndexes = true;
+  bool _regularBackfillComplete = false;
+  DateTime? _regularIndexedFromDate;
   final QuitHabitSecureStorageService _quitSecureStorage;
+  final Future<Box<Habit>> Function()? _habitsBoxOpener;
+  final Future<Box<HabitCompletion>> Function()? _completionsBoxOpener;
+  final Future<Box<dynamic>> Function(String boxName)? _dynamicBoxOpener;
 
   // ---------------------------------------------------------------------------
   // In-memory completion-by-date cache
@@ -44,15 +77,28 @@ class HabitRepository {
     }
   }
 
-  HabitRepository({QuitHabitSecureStorageService? quitSecureStorage})
-    : _quitSecureStorage = quitSecureStorage ?? QuitHabitSecureStorageService();
+  HabitRepository({
+    QuitHabitSecureStorageService? quitSecureStorage,
+    Future<Box<Habit>> Function()? habitsBoxOpener,
+    Future<Box<HabitCompletion>> Function()? completionsBoxOpener,
+    Future<Box<dynamic>> Function(String boxName)? dynamicBoxOpener,
+  }) : _quitSecureStorage =
+           quitSecureStorage ?? QuitHabitSecureStorageService(),
+       _habitsBoxOpener = habitsBoxOpener,
+       _completionsBoxOpener = completionsBoxOpener,
+       _dynamicBoxOpener = dynamicBoxOpener;
 
   /// Get the habits box (lazy initialization with caching)
   Future<Box<Habit>> _getHabitsBox() async {
     if (_habitsBox != null && _habitsBox!.isOpen) {
       return _habitsBox!;
     }
-    _habitsBox = await HiveService.getBox<Habit>(habitsBoxName);
+    final opener = _habitsBoxOpener;
+    if (opener != null) {
+      _habitsBox = await opener();
+    } else {
+      _habitsBox = await HiveService.getBox<Habit>(habitsBoxName);
+    }
     return _habitsBox!;
   }
 
@@ -61,9 +107,14 @@ class HabitRepository {
     if (_completionsBox != null && _completionsBox!.isOpen) {
       return _completionsBox!;
     }
-    _completionsBox = await HiveService.getBox<HabitCompletion>(
-      completionsBoxName,
-    );
+    final opener = _completionsBoxOpener;
+    if (opener != null) {
+      _completionsBox = await opener();
+    } else {
+      _completionsBox = await HiveService.getBox<HabitCompletion>(
+        completionsBoxName,
+      );
+    }
     return _completionsBox!;
   }
 
@@ -233,10 +284,22 @@ class HabitRepository {
         'Quit secure storage is locked. Unlock quit habits to write quit logs.',
       );
     }
+    if (!habit.isQuitHabit) {
+      await _ensureRegularCompletionIndexesReady();
+    }
 
     // Store points in the completion record for undo tracking
     final completionWithPoints = completion.copyWith(pointsEarned: pointsDelta);
+    final previous = habit.isQuitHabit
+        ? null
+        : box.get(completionWithPoints.id);
     await box.put(completionWithPoints.id, completionWithPoints);
+    if (!habit.isQuitHabit) {
+      if (previous != null) {
+        await _removeRegularCompletionFromIndexes(previous);
+      }
+      await _addRegularCompletionToIndexes(completionWithPoints);
+    }
 
     // Invalidate cached completions for this date
     invalidateCompletionCache(completion.completedDate);
@@ -314,8 +377,20 @@ class HabitRepository {
     }
 
     if (regularCompletionsMap.isNotEmpty) {
+      await _ensureRegularCompletionIndexesReady();
       final regularBox = await _getCompletionsBox();
+      final existing = <String, HabitCompletion>{};
+      for (final id in regularCompletionsMap.keys) {
+        final previous = regularBox.get(id);
+        if (previous != null) {
+          existing[id] = previous;
+        }
+      }
       await regularBox.putAll(regularCompletionsMap);
+      for (final completion in existing.values) {
+        await _removeRegularCompletionFromIndexes(completion);
+      }
+      await _addRegularCompletionsToIndexes(regularCompletionsMap.values);
     }
     if (quitCompletionsMap.isNotEmpty) {
       final quitBox = await _getQuitCompletionsBoxOrNull();
@@ -350,8 +425,26 @@ class HabitRepository {
       return quitBox.values.where((c) => c.habitId == habitId).toList();
     }
 
+    await _ensureRegularCompletionIndexesReady();
     final regularBox = await _getCompletionsBox();
-    return regularBox.values.where((c) => c.habitId == habitId).toList();
+    if (!_useRegularCompletionIndexes || !_regularBackfillComplete) {
+      return regularBox.values.where((c) => c.habitId == habitId).toList();
+    }
+    final ids = _readStringList(
+      (await _getRegularCompletionsHabitIndexBox()).get(habitId),
+    );
+    if (ids.isEmpty) {
+      return const <HabitCompletion>[];
+    }
+
+    final completions = <HabitCompletion>[];
+    for (final id in ids) {
+      final completion = regularBox.get(id);
+      if (completion != null && completion.habitId == habitId) {
+        completions.add(completion);
+      }
+    }
+    return completions;
   }
 
   /// Get completions for a habit on a specific date
@@ -359,8 +452,49 @@ class HabitRepository {
     String habitId,
     DateTime date,
   ) async {
-    final completions = await getCompletionsForHabit(habitId);
-    return completions.where((c) => c.isForDate(date)).toList();
+    final habit = await getHabitById(habitId);
+    if (habit == null) return const <HabitCompletion>[];
+    if (habit.isQuitHabit) {
+      final completions = await getCompletionsForHabit(habitId);
+      return completions.where((c) => c.isForDate(date)).toList();
+    }
+
+    await _ensureRegularCompletionIndexesReady();
+    final regularBox = await _getCompletionsBox();
+    if (!_useRegularCompletionIndexes ||
+        !_isDateWithinRegularIndexedRange(date)) {
+      return regularBox.values.where((c) {
+        return c.habitId == habitId && c.isForDate(date);
+      }).toList();
+    }
+    final dateIds = _readStringList(
+      (await _getRegularCompletionsDateIndexBox()).get(_dateKey(date)),
+    );
+    if (dateIds.isEmpty) {
+      return const <HabitCompletion>[];
+    }
+
+    final completions = <HabitCompletion>[];
+    for (final id in dateIds) {
+      final completion = regularBox.get(id);
+      if (completion != null && completion.habitId == habitId) {
+        completions.add(completion);
+      }
+    }
+    return completions;
+  }
+
+  /// Get cached per-day completion summary for regular habits.
+  Future<Map<String, int>> getDailyCompletionSummary(DateTime date) async {
+    await _ensureRegularCompletionIndexesReady();
+    if (!_useRegularCompletionIndexes ||
+        !_isDateWithinRegularIndexedRange(date)) {
+      return _buildDailyCompletionSummaryFromCompletions(
+        (await _getCompletionsBox()).values.where((c) => c.isForDate(date)),
+      );
+    }
+    final value = (await _getHabitDailySummaryBox()).get(_dateKey(date));
+    return _readSummaryMap(value);
   }
 
   Future<Box<Habit>?> _getQuitHabitsBoxOrNull() async {
@@ -388,6 +522,543 @@ class HabitRepository {
     return _quitCompletionsBox!;
   }
 
+  Future<Box<dynamic>> _getRegularCompletionsDateIndexBox() async {
+    if (_regularCompletionsDateIndexBox != null &&
+        _regularCompletionsDateIndexBox!.isOpen) {
+      return _regularCompletionsDateIndexBox!;
+    }
+    _regularCompletionsDateIndexBox = await _openDynamicBox(
+      _regularCompletionsDateIndexBoxName,
+    );
+    return _regularCompletionsDateIndexBox!;
+  }
+
+  Future<Box<dynamic>> _getRegularCompletionsHabitIndexBox() async {
+    if (_regularCompletionsHabitIndexBox != null &&
+        _regularCompletionsHabitIndexBox!.isOpen) {
+      return _regularCompletionsHabitIndexBox!;
+    }
+    _regularCompletionsHabitIndexBox = await _openDynamicBox(
+      _regularCompletionsHabitIndexBoxName,
+    );
+    return _regularCompletionsHabitIndexBox!;
+  }
+
+  Future<Box<dynamic>> _getHabitDailySummaryBox() async {
+    if (_habitDailySummaryBox != null && _habitDailySummaryBox!.isOpen) {
+      return _habitDailySummaryBox!;
+    }
+    _habitDailySummaryBox = await _openDynamicBox(_habitDailySummaryBoxName);
+    return _habitDailySummaryBox!;
+  }
+
+  Future<Box<dynamic>> _getRegularCompletionsIndexMetaBox() async {
+    if (_regularCompletionsIndexMetaBox != null &&
+        _regularCompletionsIndexMetaBox!.isOpen) {
+      return _regularCompletionsIndexMetaBox!;
+    }
+    _regularCompletionsIndexMetaBox = await _openDynamicBox(
+      _regularCompletionsIndexMetaBoxName,
+    );
+    return _regularCompletionsIndexMetaBox!;
+  }
+
+  Future<Box<dynamic>> _openDynamicBox(String boxName) async {
+    final opener = _dynamicBoxOpener;
+    if (opener != null) {
+      return opener(boxName);
+    }
+    return HiveService.getBox<dynamic>(boxName);
+  }
+
+  Future<void> _ensureRegularCompletionIndexesReady() async {
+    if (_regularCompletionIndexesReady) return;
+    final metaBox = await _getRegularCompletionsIndexMetaBox();
+    final version = _asInt(metaBox.get('version'));
+    final rebuildNeeded = metaBox.get(_rebuildNeededMetaKey) == true;
+    final hasBootstrapWindow =
+        metaBox.get(_indexedFromMetaKey) is String &&
+        metaBox.get(_oldestDataMetaKey) is String;
+    var attemptedRebuild = false;
+
+    if (version != _regularCompletionsIndexVersion ||
+        rebuildNeeded ||
+        !hasBootstrapWindow) {
+      final reason = version != _regularCompletionsIndexVersion
+          ? 'version_mismatch'
+          : rebuildNeeded
+          ? 'rebuild_needed_flag'
+          : 'missing_bootstrap_window';
+      await _bootstrapRecentRegularCompletionIndexes(reason: reason);
+      await metaBox.put('version', _regularCompletionsIndexVersion);
+      attemptedRebuild = true;
+    }
+
+    if (!_regularCompletionIntegrityChecked) {
+      var valid = await _hasValidRegularCompletionIndexes();
+      if (!valid && !attemptedRebuild) {
+        await _bootstrapRecentRegularCompletionIndexes(
+          reason: 'integrity_mismatch',
+        );
+        await metaBox.put('version', _regularCompletionsIndexVersion);
+        valid = await _hasValidRegularCompletionIndexes();
+      }
+
+      if (!valid) {
+        _useRegularCompletionIndexes = false;
+        await metaBox.put(_rebuildNeededMetaKey, true);
+        _debugLog(
+          'Regular completion indexes remained invalid after rebuild; using scan mode for this session.',
+        );
+      } else {
+        _useRegularCompletionIndexes = true;
+        await metaBox.delete(_rebuildNeededMetaKey);
+      }
+      _regularIndexedFromDate = _parseDateKey(
+        '${metaBox.get(_indexedFromMetaKey)}',
+      );
+      _regularBackfillComplete = metaBox.get(_backfillCompleteMetaKey) == true;
+      _regularCompletionIntegrityChecked = true;
+    }
+
+    _regularCompletionIndexesReady = true;
+  }
+
+  Future<bool> _hasValidRegularCompletionIndexes() async {
+    final completionsBox = await _getCompletionsBox();
+    if (completionsBox.isEmpty) return true;
+    final indexedFrom =
+        _regularIndexedFromDate ??
+        _parseDateKey(
+          '${(await _getRegularCompletionsIndexMetaBox()).get(_indexedFromMetaKey)}',
+        );
+    if (indexedFrom == null) {
+      return false;
+    }
+
+    var expectedCount = 0;
+    for (final completion in completionsBox.values) {
+      if (!_isDateBefore(completion.completedDate, indexedFrom)) {
+        expectedCount++;
+      }
+    }
+
+    var dateIndexedCount = 0;
+    for (final dynamic value
+        in (await _getRegularCompletionsDateIndexBox()).values) {
+      dateIndexedCount += _readStringList(value).length;
+    }
+    if (dateIndexedCount != expectedCount) {
+      return false;
+    }
+
+    var habitIndexedCount = 0;
+    for (final dynamic value
+        in (await _getRegularCompletionsHabitIndexBox()).values) {
+      habitIndexedCount += _readStringList(value).length;
+    }
+    if (habitIndexedCount != expectedCount) {
+      return false;
+    }
+
+    var summarizedTotal = 0;
+    for (final dynamic value in (await _getHabitDailySummaryBox()).values) {
+      summarizedTotal += _readSummaryMap(value)['entries'] ?? 0;
+    }
+    return summarizedTotal == expectedCount;
+  }
+
+  Future<void> _bootstrapRecentRegularCompletionIndexes({
+    required String reason,
+  }) async {
+    final completionsBox = await _getCompletionsBox();
+    final recordCount = completionsBox.length;
+    final stopwatch = Stopwatch()..start();
+    final dateIndexBox = await _getRegularCompletionsDateIndexBox();
+    final habitIndexBox = await _getRegularCompletionsHabitIndexBox();
+    final summaryBox = await _getHabitDailySummaryBox();
+    final metaBox = await _getRegularCompletionsIndexMetaBox();
+
+    await dateIndexBox.clear();
+    await habitIndexBox.clear();
+    await summaryBox.clear();
+
+    final dateIndex = <String, List<String>>{};
+    final habitIndex = <String, List<String>>{};
+    final dailySummary = <String, Map<String, int>>{};
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final bootstrapFrom = today.subtract(
+      const Duration(days: _bootstrapWindowDays - 1),
+    );
+    DateTime? oldestData;
+    var scanned = 0;
+
+    for (final completion in completionsBox.values) {
+      scanned++;
+      if (scanned % _sessionScanYieldInterval == 0) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      final completedDate = DateTime(
+        completion.completedDate.year,
+        completion.completedDate.month,
+        completion.completedDate.day,
+      );
+      if (oldestData == null || completedDate.isBefore(oldestData)) {
+        oldestData = completedDate;
+      }
+      if (_isDateBefore(completedDate, bootstrapFrom)) {
+        continue;
+      }
+
+      final dateKey = _dateKey(completion.completedDate);
+      dateIndex.putIfAbsent(dateKey, () => <String>[]).add(completion.id);
+      habitIndex
+          .putIfAbsent(completion.habitId, () => <String>[])
+          .add(completion.id);
+      _applyCompletionDelta(
+        dailySummary.putIfAbsent(dateKey, _newDailySummary),
+        completion,
+        1,
+      );
+    }
+
+    if (dateIndex.isNotEmpty) {
+      await dateIndexBox.putAll(dateIndex);
+    }
+    if (habitIndex.isNotEmpty) {
+      await habitIndexBox.putAll(habitIndex);
+    }
+    if (dailySummary.isNotEmpty) {
+      await summaryBox.putAll(dailySummary);
+    }
+
+    final indexedFrom = oldestData == null || oldestData.isAfter(bootstrapFrom)
+        ? (oldestData ?? today)
+        : bootstrapFrom;
+    final backfillComplete =
+        oldestData == null || !indexedFrom.isAfter(oldestData);
+    await metaBox.put(_indexedFromMetaKey, _dateKey(indexedFrom));
+    await metaBox.put(_oldestDataMetaKey, _dateKey(oldestData ?? indexedFrom));
+    await metaBox.put(_lastIndexedMetaKey, _dateKey(indexedFrom));
+    await metaBox.put(_backfillCompleteMetaKey, backfillComplete);
+    await metaBox.put(_backfillPausedMetaKey, false);
+    await metaBox.delete(_rebuildNeededMetaKey);
+
+    _regularIndexedFromDate = indexedFrom;
+    _regularBackfillComplete = backfillComplete;
+    _useRegularCompletionIndexes = true;
+
+    stopwatch.stop();
+    _debugLog(
+      'Regular completion index rebuild finished. reason=$reason records=$recordCount durationMs=${stopwatch.elapsedMilliseconds}',
+    );
+  }
+
+  Future<void> _addRegularCompletionsToIndexes(
+    Iterable<HabitCompletion> completions,
+  ) async {
+    if (!_useRegularCompletionIndexes) return;
+    for (final completion in completions) {
+      await _addRegularCompletionToIndexes(completion);
+    }
+  }
+
+  Future<void> _addRegularCompletionToIndexes(
+    HabitCompletion completion,
+  ) async {
+    if (!_useRegularCompletionIndexes ||
+        !_isDateWithinRegularIndexedRange(completion.completedDate)) {
+      await _markRegularBackfillNeededForDate(completion.completedDate);
+      return;
+    }
+    final dateKey = _dateKey(completion.completedDate);
+    final dateIndexBox = await _getRegularCompletionsDateIndexBox();
+    final idsForDate = _readStringList(dateIndexBox.get(dateKey));
+    if (!idsForDate.contains(completion.id)) {
+      idsForDate.add(completion.id);
+      await dateIndexBox.put(dateKey, idsForDate);
+    }
+
+    final habitIndexBox = await _getRegularCompletionsHabitIndexBox();
+    final idsForHabit = _readStringList(habitIndexBox.get(completion.habitId));
+    if (!idsForHabit.contains(completion.id)) {
+      idsForHabit.add(completion.id);
+      await habitIndexBox.put(completion.habitId, idsForHabit);
+    }
+
+    final summaryBox = await _getHabitDailySummaryBox();
+    final summary = _readSummaryMap(summaryBox.get(dateKey));
+    _applyCompletionDelta(summary, completion, 1);
+    await _writeOrDeleteDailySummary(summaryBox, dateKey, summary);
+  }
+
+  Future<void> _removeRegularCompletionFromIndexes(
+    HabitCompletion completion,
+  ) async {
+    if (!_useRegularCompletionIndexes ||
+        !_isDateWithinRegularIndexedRange(completion.completedDate)) {
+      return;
+    }
+    final dateKey = _dateKey(completion.completedDate);
+    final dateIndexBox = await _getRegularCompletionsDateIndexBox();
+    final idsForDate = _readStringList(dateIndexBox.get(dateKey));
+    idsForDate.remove(completion.id);
+    if (idsForDate.isEmpty) {
+      await dateIndexBox.delete(dateKey);
+    } else {
+      await dateIndexBox.put(dateKey, idsForDate);
+    }
+
+    final habitIndexBox = await _getRegularCompletionsHabitIndexBox();
+    final idsForHabit = _readStringList(habitIndexBox.get(completion.habitId));
+    idsForHabit.remove(completion.id);
+    if (idsForHabit.isEmpty) {
+      await habitIndexBox.delete(completion.habitId);
+    } else {
+      await habitIndexBox.put(completion.habitId, idsForHabit);
+    }
+
+    final summaryBox = await _getHabitDailySummaryBox();
+    final summary = _readSummaryMap(summaryBox.get(dateKey));
+    _applyCompletionDelta(summary, completion, -1);
+    await _writeOrDeleteDailySummary(summaryBox, dateKey, summary);
+  }
+
+  Future<void> _writeOrDeleteDailySummary(
+    Box<dynamic> summaryBox,
+    String dateKey,
+    Map<String, int> summary,
+  ) async {
+    if ((summary['entries'] ?? 0) <= 0) {
+      await summaryBox.delete(dateKey);
+      return;
+    }
+    await summaryBox.put(dateKey, summary);
+  }
+
+  Map<String, int> _newDailySummary() {
+    return <String, int>{
+      'entries': 0,
+      'successfulEntries': 0,
+      'skippedEntries': 0,
+      'postponedEntries': 0,
+      'totalCount': 0,
+    };
+  }
+
+  Map<String, int> _readSummaryMap(Object? value) {
+    final summary = _newDailySummary();
+    if (value is Map) {
+      for (final entry in value.entries) {
+        final key = '${entry.key}';
+        if (!summary.containsKey(key)) continue;
+        summary[key] = _asInt(entry.value);
+      }
+    }
+    return summary;
+  }
+
+  void _applyCompletionDelta(
+    Map<String, int> summary,
+    HabitCompletion completion,
+    int delta,
+  ) {
+    summary['entries'] = (summary['entries'] ?? 0) + delta;
+    if (completion.isPostponed) {
+      summary['postponedEntries'] = (summary['postponedEntries'] ?? 0) + delta;
+    } else if (completion.isSkipped) {
+      summary['skippedEntries'] = (summary['skippedEntries'] ?? 0) + delta;
+    } else if (completion.count > 0) {
+      summary['successfulEntries'] =
+          (summary['successfulEntries'] ?? 0) + delta;
+    }
+    summary['totalCount'] =
+        (summary['totalCount'] ?? 0) + (completion.count * delta);
+
+    for (final key in summary.keys.toList()) {
+      final value = summary[key] ?? 0;
+      summary[key] = value < 0 ? 0 : value;
+    }
+  }
+
+  List<String> _readStringList(Object? value) {
+    if (value is! List) return <String>[];
+    return value.map((dynamic item) => '$item').toList();
+  }
+
+  String _dateKey(DateTime date) {
+    final yyyy = date.year.toString().padLeft(4, '0');
+    final mm = date.month.toString().padLeft(2, '0');
+    final dd = date.day.toString().padLeft(2, '0');
+    return '$yyyy$mm$dd';
+  }
+
+  DateTime? _parseDateKey(String key) {
+    if (key.length != 8) return null;
+    final year = int.tryParse(key.substring(0, 4));
+    final month = int.tryParse(key.substring(4, 6));
+    final day = int.tryParse(key.substring(6, 8));
+    if (year == null || month == null || day == null) return null;
+    return DateTime(year, month, day);
+  }
+
+  List<String> _dateKeysInRange(DateTime startDate, DateTime endDate) {
+    final start = DateTime(startDate.year, startDate.month, startDate.day);
+    final end = DateTime(endDate.year, endDate.month, endDate.day);
+    if (end.isBefore(start)) {
+      return const <String>[];
+    }
+
+    final keys = <String>[];
+    var current = start;
+    while (!current.isAfter(end)) {
+      keys.add(_dateKey(current));
+      current = current.add(const Duration(days: 1));
+    }
+    return keys;
+  }
+
+  int _asInt(Object? value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? 0;
+    return 0;
+  }
+
+  bool _isDateWithinRegularIndexedRange(DateTime date) {
+    final indexedFrom = _regularIndexedFromDate;
+    if (!_useRegularCompletionIndexes || indexedFrom == null) return false;
+    return !_isDateBefore(date, indexedFrom);
+  }
+
+  bool _isRangeFullyRegularIndexed(DateTime startDate, DateTime endDate) {
+    if (!_useRegularCompletionIndexes) return false;
+    if (_regularBackfillComplete) return true;
+    final indexedFrom = _regularIndexedFromDate;
+    if (indexedFrom == null) return false;
+    final start = DateTime(startDate.year, startDate.month, startDate.day);
+    final end = DateTime(endDate.year, endDate.month, endDate.day);
+    if (end.isBefore(start)) return false;
+    return !start.isBefore(indexedFrom);
+  }
+
+  bool _isDateBefore(DateTime a, DateTime b) {
+    final aOnly = DateTime(a.year, a.month, a.day);
+    final bOnly = DateTime(b.year, b.month, b.day);
+    return aOnly.isBefore(bOnly);
+  }
+
+  bool _isDateAfter(DateTime a, DateTime b) {
+    final aOnly = DateTime(a.year, a.month, a.day);
+    final bOnly = DateTime(b.year, b.month, b.day);
+    return aOnly.isAfter(bOnly);
+  }
+
+  Future<void> _markRegularBackfillNeededForDate(DateTime date) async {
+    final meta = await _getRegularCompletionsIndexMetaBox();
+    final dateOnly = DateTime(date.year, date.month, date.day);
+    final existingOldest = _parseDateKey('${meta.get(_oldestDataMetaKey)}');
+    if (existingOldest == null || dateOnly.isBefore(existingOldest)) {
+      await meta.put(_oldestDataMetaKey, _dateKey(dateOnly));
+    }
+
+    final indexedFrom = _regularIndexedFromDate ??
+        _parseDateKey('${meta.get(_indexedFromMetaKey)}');
+    if (indexedFrom != null && dateOnly.isBefore(indexedFrom)) {
+      await meta.put(_backfillCompleteMetaKey, false);
+      _regularBackfillComplete = false;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _scanRegularChunkEntries(
+    DateTime chunkStart,
+    DateTime chunkEnd,
+  ) async {
+    final start = DateTime(chunkStart.year, chunkStart.month, chunkStart.day);
+    final end = DateTime(chunkEnd.year, chunkEnd.month, chunkEnd.day);
+    final entries = <Map<String, dynamic>>[];
+    var scanned = 0;
+    for (final completion in (await _getCompletionsBox()).values) {
+      scanned++;
+      if (scanned % _sessionScanYieldInterval == 0) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      final completedDate = DateTime(
+        completion.completedDate.year,
+        completion.completedDate.month,
+        completion.completedDate.day,
+      );
+      if (_isDateBefore(completedDate, start) ||
+          _isDateAfter(completedDate, end)) {
+        continue;
+      }
+      entries.add(<String, dynamic>{
+        'id': completion.id,
+        'habitId': completion.habitId,
+        'dateKey': _dateKey(completedDate),
+        'count': completion.count,
+        'isSkipped': completion.isSkipped,
+        'isPostponed': completion.isPostponed,
+      });
+    }
+    return entries;
+  }
+
+  List<HabitCompletion> _scanHabitRangeFromBox(
+    Iterable<HabitCompletion> completions,
+    String habitId,
+    DateTime startDate,
+    DateTime endDate,
+  ) {
+    final start = DateTime(startDate.year, startDate.month, startDate.day);
+    final end = DateTime(endDate.year, endDate.month, endDate.day);
+    return completions.where((completion) {
+      if (completion.habitId != habitId) return false;
+      final date = DateTime(
+        completion.completedDate.year,
+        completion.completedDate.month,
+        completion.completedDate.day,
+      );
+      return !date.isBefore(start) && !date.isAfter(end);
+    }).toList();
+  }
+
+  Future<List<HabitCompletion>> _readRegularIndexedRange(
+    Box<HabitCompletion> regularBox,
+    String habitId,
+    DateTime startDate,
+    DateTime endDate,
+  ) async {
+    final dateIndexBox = await _getRegularCompletionsDateIndexBox();
+    final out = <HabitCompletion>[];
+    for (final key in _dateKeysInRange(startDate, endDate)) {
+      final ids = _readStringList(dateIndexBox.get(key));
+      for (final id in ids) {
+        final completion = regularBox.get(id);
+        if (completion != null && completion.habitId == habitId) {
+          out.add(completion);
+        }
+      }
+    }
+    return out;
+  }
+
+  Map<String, int> _buildDailyCompletionSummaryFromCompletions(
+    Iterable<HabitCompletion> completions,
+  ) {
+    final summary = _newDailySummary();
+    for (final completion in completions) {
+      _applyCompletionDelta(summary, completion, 1);
+    }
+    return summary;
+  }
+
+  void _debugLog(String message) {
+    if (!kDebugMode) return;
+    debugPrint('[HabitRepository] $message');
+  }
+
   /// Get all completions grouped by habit id for a specific date.
   /// This avoids N queries when building day dashboards.
   ///
@@ -402,13 +1073,16 @@ class HabitRepository {
     final dateKey = DateTime(date.year, date.month, date.day);
 
     // Full cache hit — both regular & quit requested and we already have it.
-    if (includeRegular && includeQuit && _completionDateCache.containsKey(dateKey)) {
+    if (includeRegular &&
+        includeQuit &&
+        _completionDateCache.containsKey(dateKey)) {
       return _completionDateCache[dateKey]!;
     }
 
     final result = <String, List<HabitCompletion>>{};
 
     if (includeRegular) {
+      await _ensureRegularCompletionIndexesReady();
       final regularHabitsBox = await _getHabitsBox();
       final regularHabitIds = regularHabitsBox.values
           .where((h) => !h.isQuitHabit)
@@ -416,12 +1090,27 @@ class HabitRepository {
           .toSet();
 
       final regularCompletionsBox = await _getCompletionsBox();
-      for (final completion in regularCompletionsBox.values) {
-        if (!completion.isForDate(date)) continue;
-        if (!regularHabitIds.contains(completion.habitId)) continue;
-        result
-            .putIfAbsent(completion.habitId, () => <HabitCompletion>[])
-            .add(completion);
+      if (_useRegularCompletionIndexes &&
+          _isDateWithinRegularIndexedRange(date)) {
+        final ids = _readStringList(
+          (await _getRegularCompletionsDateIndexBox()).get(_dateKey(date)),
+        );
+        for (final id in ids) {
+          final completion = regularCompletionsBox.get(id);
+          if (completion == null) continue;
+          if (!regularHabitIds.contains(completion.habitId)) continue;
+          result
+              .putIfAbsent(completion.habitId, () => <HabitCompletion>[])
+              .add(completion);
+        }
+      } else {
+        for (final completion in regularCompletionsBox.values) {
+          if (!completion.isForDate(date)) continue;
+          if (!regularHabitIds.contains(completion.habitId)) continue;
+          result
+              .putIfAbsent(completion.habitId, () => <HabitCompletion>[])
+              .add(completion);
+        }
       }
     }
 
@@ -458,13 +1147,92 @@ class HabitRepository {
     DateTime startDate,
     DateTime endDate,
   ) async {
-    final completions = await getCompletionsForHabit(habitId);
-    return completions.where((c) {
-      return c.completedDate.isAfter(
-            startDate.subtract(const Duration(days: 1)),
-          ) &&
-          c.completedDate.isBefore(endDate.add(const Duration(days: 1)));
-    }).toList();
+    final habit = await getHabitById(habitId);
+    if (habit == null) return const <HabitCompletion>[];
+    if (habit.isQuitHabit) {
+      final completions = await getCompletionsForHabit(habitId);
+      return completions.where((c) {
+        return c.completedDate.isAfter(
+              startDate.subtract(const Duration(days: 1)),
+            ) &&
+            c.completedDate.isBefore(endDate.add(const Duration(days: 1)));
+      }).toList();
+    }
+
+    await _ensureRegularCompletionIndexesReady();
+    final regularBox = await _getCompletionsBox();
+    if (!_useRegularCompletionIndexes) {
+      return _scanHabitRangeFromBox(
+        regularBox.values,
+        habitId,
+        startDate,
+        endDate,
+      );
+    }
+
+    if (!_isRangeFullyRegularIndexed(startDate, endDate)) {
+      final indexedFrom = _regularIndexedFromDate;
+      if (indexedFrom == null) {
+        return _scanHabitRangeFromBox(
+          regularBox.values,
+          habitId,
+          startDate,
+          endDate,
+        );
+      }
+
+      final out = <HabitCompletion>[];
+      final startOnly = DateTime(
+        startDate.year,
+        startDate.month,
+        startDate.day,
+      );
+      final endOnly = DateTime(endDate.year, endDate.month, endDate.day);
+      final dayBeforeIndexed = indexedFrom.subtract(const Duration(days: 1));
+
+      if (!startOnly.isAfter(dayBeforeIndexed)) {
+        final olderEnd = endOnly.isBefore(dayBeforeIndexed)
+            ? endOnly
+            : dayBeforeIndexed;
+        out.addAll(
+          _scanHabitRangeFromBox(
+            regularBox.values,
+            habitId,
+            startOnly,
+            olderEnd,
+          ),
+        );
+      }
+
+      if (!endOnly.isBefore(indexedFrom)) {
+        final indexedStart = startOnly.isBefore(indexedFrom)
+            ? indexedFrom
+            : startOnly;
+        out.addAll(
+          await _readRegularIndexedRange(
+            regularBox,
+            habitId,
+            indexedStart,
+            endOnly,
+          ),
+        );
+      }
+      return out;
+    }
+    final dateIndexBox = await _getRegularCompletionsDateIndexBox();
+    final out = <HabitCompletion>[];
+
+    for (final key in _dateKeysInRange(startDate, endDate)) {
+      final ids = _readStringList(dateIndexBox.get(key));
+      for (final id in ids) {
+        final completion = regularBox.get(id);
+        if (completion != null && completion.habitId == habitId) {
+          out.add(completion);
+        }
+      }
+    }
+
+    return out;
   }
 
   /// Check if habit is completed today
@@ -491,6 +1259,7 @@ class HabitRepository {
   /// - Recalculates streak
   Future<void> deleteCompletion(String completionId) async {
     final regularBox = await _getCompletionsBox();
+    await _ensureRegularCompletionIndexesReady();
     var completion = regularBox.get(completionId);
     Box<HabitCompletion>? sourceBox = regularBox;
     if (completion == null) {
@@ -540,6 +1309,9 @@ class HabitRepository {
 
     // Delete the completion
     await sourceBox.delete(completionId);
+    if (identical(sourceBox, regularBox)) {
+      await _removeRegularCompletionFromIndexes(completion);
+    }
 
     // Invalidate cached completions for this date
     invalidateCompletionCache(completion.completedDate);
@@ -566,6 +1338,9 @@ class HabitRepository {
         ? await _getQuitCompletionsBoxOrNull()
         : await _getCompletionsBox();
     if (completionBox == null) return 0;
+    if (!habit.isQuitHabit) {
+      await _ensureRegularCompletionIndexesReady();
+    }
 
     for (final completion in completions) {
       // Track points to revert
@@ -603,6 +1378,9 @@ class HabitRepository {
 
       // Delete the completion
       await completionBox.delete(completion.id);
+      if (!habit.isQuitHabit) {
+        await _removeRegularCompletionFromIndexes(completion);
+      }
     }
 
     // Invalidate cached completions for this date
@@ -626,12 +1404,34 @@ class HabitRepository {
         ? await _getQuitCompletionsBoxOrNull()
         : await _getCompletionsBox();
     if (box == null) return;
-    final toDelete = box.values
-        .where((c) => c.habitId == habitId)
-        .map((c) => c.id)
-        .toList();
+
+    List<String> toDelete;
+    if (habit.isQuitHabit) {
+      toDelete = box.values
+          .where((c) => c.habitId == habitId)
+          .map((c) => c.id)
+          .toList();
+    } else {
+      await _ensureRegularCompletionIndexesReady();
+      if (_useRegularCompletionIndexes && _regularBackfillComplete) {
+        toDelete = _readStringList(
+          (await _getRegularCompletionsHabitIndexBox()).get(habitId),
+        );
+      } else {
+        toDelete = box.values
+            .where((c) => c.habitId == habitId)
+            .map((c) => c.id)
+            .toList();
+      }
+    }
 
     for (final id in toDelete) {
+      if (!habit.isQuitHabit) {
+        final completion = box.get(id);
+        if (completion != null) {
+          await _removeRegularCompletionFromIndexes(completion);
+        }
+      }
       await box.delete(id);
     }
 
@@ -1102,6 +1902,7 @@ class HabitRepository {
 
   /// Delete all habits (for reset functionality)
   Future<void> deleteAllHabits() async {
+    await _ensureRegularCompletionIndexesReady();
     final habitsBox = await _getHabitsBox();
     final completionsBox = await _getCompletionsBox();
     await habitsBox.clear();
@@ -1110,6 +1911,190 @@ class HabitRepository {
     final quitCompletionsBox = await _getQuitCompletionsBoxOrNull();
     await quitHabitsBox?.clear();
     await quitCompletionsBox?.clear();
+    await (await _getRegularCompletionsDateIndexBox()).clear();
+    await (await _getRegularCompletionsHabitIndexBox()).clear();
+    await (await _getHabitDailySummaryBox()).clear();
+    final meta = await _getRegularCompletionsIndexMetaBox();
+    await meta.put('version', _regularCompletionsIndexVersion);
+    await meta.delete(_rebuildNeededMetaKey);
+    await meta.put(_backfillCompleteMetaKey, true);
+    await meta.put(_backfillPausedMetaKey, false);
+    final todayKey = _dateKey(DateTime.now());
+    await meta.put(_indexedFromMetaKey, todayKey);
+    await meta.put(_oldestDataMetaKey, todayKey);
+    await meta.put(_lastIndexedMetaKey, todayKey);
+    _regularIndexedFromDate = _parseDateKey(todayKey);
+    _regularBackfillComplete = true;
     invalidateCompletionCache();
   }
+
+  Future<void> setBackfillPaused(bool paused) async {
+    await _ensureRegularCompletionIndexesReady();
+    await (await _getRegularCompletionsIndexMetaBox()).put(
+      _backfillPausedMetaKey,
+      paused,
+    );
+  }
+
+  Future<ModuleHistoryOptimizationStatus> getHistoryOptimizationStatus() async {
+    await _ensureRegularCompletionIndexesReady();
+    final meta = await _getRegularCompletionsIndexMetaBox();
+    return ModuleHistoryOptimizationStatus(
+      moduleId: 'habits',
+      ready: _regularCompletionIndexesReady,
+      usingScanFallback: !_useRegularCompletionIndexes,
+      backfillComplete: meta.get(_backfillCompleteMetaKey) == true,
+      paused: meta.get(_backfillPausedMetaKey) == true,
+      indexedFromDateKey: meta.get(_indexedFromMetaKey) as String?,
+      oldestDataDateKey: meta.get(_oldestDataMetaKey) as String?,
+      lastIndexedDateKey: meta.get(_lastIndexedMetaKey) as String?,
+      bootstrapWindowDays: _bootstrapWindowDays,
+    );
+  }
+
+  Future<bool> backfillNextChunk({
+    int chunkDays = _defaultBackfillChunkDays,
+  }) async {
+    await _ensureRegularCompletionIndexesReady();
+    if (!_useRegularCompletionIndexes) return false;
+
+    final meta = await _getRegularCompletionsIndexMetaBox();
+    if (meta.get(_backfillPausedMetaKey) == true) {
+      return false;
+    }
+    if (meta.get(_backfillCompleteMetaKey) == true) {
+      return false;
+    }
+
+    final indexedFrom = _parseDateKey('${meta.get(_indexedFromMetaKey)}');
+    final oldestData = _parseDateKey('${meta.get(_oldestDataMetaKey)}');
+    if (indexedFrom == null || oldestData == null) {
+      await meta.put(_rebuildNeededMetaKey, true);
+      return false;
+    }
+    if (!indexedFrom.isAfter(oldestData)) {
+      await meta.put(_backfillCompleteMetaKey, true);
+      _regularBackfillComplete = true;
+      return false;
+    }
+
+    final chunkEnd = indexedFrom.subtract(const Duration(days: 1));
+    final chunkStartCandidate = chunkEnd.subtract(
+      Duration(days: chunkDays - 1),
+    );
+    final chunkStart = chunkStartCandidate.isBefore(oldestData)
+        ? oldestData
+        : chunkStartCandidate;
+
+    final entries = await _scanRegularChunkEntries(chunkStart, chunkEnd);
+    final aggregated = await Isolate.run<Map<String, dynamic>>(
+      () => _aggregateHabitChunkWorker(<String, dynamic>{'entries': entries}),
+    );
+
+    final dateIndexRaw = aggregated['dateIndex'] as Map<String, dynamic>? ?? {};
+    final habitIndexRaw =
+        aggregated['habitIndex'] as Map<String, dynamic>? ?? {};
+    final dailySummaryRaw =
+        aggregated['dailySummary'] as Map<String, dynamic>? ?? {};
+
+    final dateIndex = <String, List<String>>{};
+    final habitIndex = <String, List<String>>{};
+    final dailySummary = <String, Map<String, int>>{};
+
+    for (final entry in dateIndexRaw.entries) {
+      dateIndex[entry.key] = (entry.value as List).map((e) => '$e').toList();
+    }
+    for (final entry in habitIndexRaw.entries) {
+      habitIndex[entry.key] = (entry.value as List).map((e) => '$e').toList();
+    }
+    for (final entry in dailySummaryRaw.entries) {
+      final raw = entry.value;
+      if (raw is! Map) continue;
+      dailySummary[entry.key] = <String, int>{
+        'entries': _asInt(raw['entries']),
+        'successfulEntries': _asInt(raw['successfulEntries']),
+        'skippedEntries': _asInt(raw['skippedEntries']),
+        'postponedEntries': _asInt(raw['postponedEntries']),
+        'totalCount': _asInt(raw['totalCount']),
+      };
+    }
+
+    final dateIndexBox = await _getRegularCompletionsDateIndexBox();
+    final habitIndexBox = await _getRegularCompletionsHabitIndexBox();
+    final summaryBox = await _getHabitDailySummaryBox();
+    if (dateIndex.isNotEmpty) {
+      await dateIndexBox.putAll(dateIndex);
+    }
+    if (habitIndex.isNotEmpty) {
+      for (final entry in habitIndex.entries) {
+        final existing = _readStringList(habitIndexBox.get(entry.key));
+        for (final id in entry.value) {
+          if (!existing.contains(id)) {
+            existing.add(id);
+          }
+        }
+        await habitIndexBox.put(entry.key, existing);
+      }
+    }
+    if (dailySummary.isNotEmpty) {
+      await summaryBox.putAll(dailySummary);
+    }
+
+    final newIndexedFrom = chunkStart;
+    final isComplete = !newIndexedFrom.isAfter(oldestData);
+    await meta.put(_indexedFromMetaKey, _dateKey(newIndexedFrom));
+    await meta.put(_lastIndexedMetaKey, _dateKey(newIndexedFrom));
+    await meta.put(_backfillCompleteMetaKey, isComplete);
+    _regularIndexedFromDate = newIndexedFrom;
+    _regularBackfillComplete = isComplete;
+    return true;
+  }
+}
+
+Map<String, dynamic> _aggregateHabitChunkWorker(Map<String, dynamic> payload) {
+  final entries = (payload['entries'] as List?) ?? const <dynamic>[];
+  final dateIndex = <String, List<String>>{};
+  final habitIndex = <String, List<String>>{};
+  final dailySummary = <String, Map<String, int>>{};
+
+  for (final raw in entries) {
+    if (raw is! Map) continue;
+    final id = '${raw['id'] ?? ''}';
+    final habitId = '${raw['habitId'] ?? ''}';
+    final dateKey = '${raw['dateKey'] ?? ''}';
+    final count = raw['count'] is int
+        ? raw['count'] as int
+        : int.tryParse('${raw['count']}') ?? 0;
+    final isSkipped = raw['isSkipped'] == true;
+    final isPostponed = raw['isPostponed'] == true;
+    if (id.isEmpty || habitId.isEmpty || dateKey.length != 8) continue;
+
+    dateIndex.putIfAbsent(dateKey, () => <String>[]).add(id);
+    habitIndex.putIfAbsent(habitId, () => <String>[]).add(id);
+
+    final summary = dailySummary.putIfAbsent(dateKey, () {
+      return <String, int>{
+        'entries': 0,
+        'successfulEntries': 0,
+        'skippedEntries': 0,
+        'postponedEntries': 0,
+        'totalCount': 0,
+      };
+    });
+    summary['entries'] = (summary['entries'] ?? 0) + 1;
+    if (isPostponed) {
+      summary['postponedEntries'] = (summary['postponedEntries'] ?? 0) + 1;
+    } else if (isSkipped) {
+      summary['skippedEntries'] = (summary['skippedEntries'] ?? 0) + 1;
+    } else if (count > 0) {
+      summary['successfulEntries'] = (summary['successfulEntries'] ?? 0) + 1;
+    }
+    summary['totalCount'] = (summary['totalCount'] ?? 0) + count;
+  }
+
+  return <String, dynamic>{
+    'dateIndex': dateIndex,
+    'habitIndex': habitIndex,
+    'dailySummary': dailySummary,
+  };
 }
