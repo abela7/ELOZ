@@ -40,11 +40,16 @@ class _HabitNotificationSettingsScreenState
   @override
   void initState() {
     super.initState();
-    _tabController =
-        TabController(length: 3, vsync: this, initialIndex: widget.initialTab);
+    _tabController = TabController(
+      length: 3,
+      vsync: this,
+      initialIndex: widget.initialTab,
+    );
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(habitNotificationSettingsProvider.notifier).refreshPermissionStates();
+      ref
+          .read(habitNotificationSettingsProvider.notifier)
+          .refreshPermissionStates();
       _loadPendingNotificationsCount();
     });
   }
@@ -60,7 +65,9 @@ class _HabitNotificationSettingsScreenState
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
-      ref.read(habitNotificationSettingsProvider.notifier).refreshPermissionStates();
+      ref
+          .read(habitNotificationSettingsProvider.notifier)
+          .refreshPermissionStates();
       _loadPendingNotificationsCount();
     }
   }
@@ -270,7 +277,9 @@ class _HabitNotificationSettingsScreenState
                 _buildDivider(isDark),
                 SettingsTile(
                   title: 'Notification Tone',
-                  value: HabitNotificationSettings.getSoundDisplayName(settings.defaultSound),
+                  value: HabitNotificationSettings.getSoundDisplayName(
+                    settings.defaultSound,
+                  ),
                   icon: Icons.graphic_eq_rounded,
                   color: infoColor,
                   onTap: () => notifier.pickDefaultSoundFromSystem(),
@@ -283,7 +292,8 @@ class _HabitNotificationSettingsScreenState
                   ),
                   icon: Icons.volume_up_rounded,
                   color: infoColor,
-                  onTap: () => _showAudioStreamPicker(context, settings, notifier),
+                  onTap: () =>
+                      _showAudioStreamPicker(context, settings, notifier),
                 ),
               ],
               _buildDivider(isDark),
@@ -302,11 +312,15 @@ class _HabitNotificationSettingsScreenState
         Builder(
           builder: (context) {
             final isBlockedByQuietHours =
-                settings.quietHoursEnabled && !settings.allowSpecialDuringQuietHours;
+                settings.quietHoursEnabled &&
+                !settings.allowSpecialDuringQuietHours;
             final needsFullScreenPermission =
-                !settings.hasFullScreenIntentPermission && settings.specialHabitAlarmMode;
+                !settings.hasFullScreenIntentPermission &&
+                settings.specialHabitAlarmMode;
             final needsOverlayPermission =
-                Platform.isAndroid && settings.specialHabitAlarmMode && !settings.hasOverlayPermission;
+                Platform.isAndroid &&
+                settings.specialHabitAlarmMode &&
+                !settings.hasOverlayPermission;
 
             return SettingsSection(
               title: 'SPECIAL HABIT ALERTS',
@@ -357,9 +371,11 @@ class _HabitNotificationSettingsScreenState
                         : AppColorSchemes.error,
                     onChanged: isBlockedByQuietHours
                         ? null
-                        : (val) => notifier.setAlwaysUseAlarmForSpecialHabits(val),
+                        : (val) =>
+                              notifier.setAlwaysUseAlarmForSpecialHabits(val),
                   ),
-                  if (settings.alwaysUseAlarmForSpecialHabits && !isBlockedByQuietHours) ...[
+                  if (settings.alwaysUseAlarmForSpecialHabits &&
+                      !isBlockedByQuietHours) ...[
                     _buildDivider(isDark),
                     SettingsTile(
                       title: 'Special Habit Tone',
@@ -392,7 +408,9 @@ class _HabitNotificationSettingsScreenState
                           settings.specialHabitVibrationPattern,
                         );
                         if (selected != null) {
-                          await notifier.setSpecialHabitVibrationPattern(selected);
+                          await notifier.setSpecialHabitVibrationPattern(
+                            selected,
+                          );
                         }
                       },
                     ),
@@ -403,7 +421,8 @@ class _HabitNotificationSettingsScreenState
                       value: settings.specialHabitAlarmMode,
                       icon: Icons.fullscreen_rounded,
                       color: AppColorSchemes.error,
-                      onChanged: (val) => notifier.setSpecialHabitAlarmMode(val),
+                      onChanged: (val) =>
+                          notifier.setSpecialHabitAlarmMode(val),
                     ),
                   ],
                 ],
@@ -471,7 +490,8 @@ class _HabitNotificationSettingsScreenState
                 ),
                 icon: Icons.notifications_active_rounded,
                 color: AppColorSchemes.primaryGold,
-                onTap: () => _showReminderTimePicker(context, settings, notifier),
+                onTap: () =>
+                    _showReminderTimePicker(context, settings, notifier),
               ),
               _buildDivider(isDark),
               SettingsTile(
@@ -481,7 +501,8 @@ class _HabitNotificationSettingsScreenState
                 ),
                 icon: Icons.wb_sunny_rounded,
                 color: AppColorSchemes.warning,
-                onTap: () => _showMorningHourPicker(context, settings, notifier),
+                onTap: () =>
+                    _showMorningHourPicker(context, settings, notifier),
               ),
             ],
           ),
@@ -499,7 +520,8 @@ class _HabitNotificationSettingsScreenState
                 ),
                 icon: Icons.timer_rounded,
                 color: accentPurple,
-                onTap: () => _showSnoozeDurationPicker(context, settings, notifier),
+                onTap: () =>
+                    _showSnoozeDurationPicker(context, settings, notifier),
               ),
               _buildDivider(isDark),
               SettingsTile(
@@ -534,23 +556,27 @@ class _HabitNotificationSettingsScreenState
               children: [
                 Text(
                   'Rolling Window Size',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'How many days to pre-schedule reminders.',
-                  style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  'How many days to pre-schedule reminders (14-30 days).',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Row(
                   children: [
                     IconButton(
-                      onPressed: settings.rollingWindowDays > 1
+                      onPressed:
+                          settings.rollingWindowDays >
+                              HabitNotificationSettings.minRollingWindowDays
                           ? () => notifier.setRollingWindowDays(
-                                settings.rollingWindowDays - 1,
-                              )
+                              settings.rollingWindowDays - 1,
+                            )
                           : null,
                       icon: const Icon(Icons.remove_circle_outline),
                     ),
@@ -559,10 +585,12 @@ class _HabitNotificationSettingsScreenState
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                     IconButton(
-                      onPressed: settings.rollingWindowDays < 30
+                      onPressed:
+                          settings.rollingWindowDays <
+                              HabitNotificationSettings.maxRollingWindowDays
                           ? () => notifier.setRollingWindowDays(
-                                settings.rollingWindowDays + 1,
-                              )
+                              settings.rollingWindowDays + 1,
+                            )
                           : null,
                       icon: const Icon(Icons.add_circle_outline),
                     ),
@@ -612,7 +640,8 @@ class _HabitNotificationSettingsScreenState
                       '${HabitNotificationSettings.formatMinutesToTime(settings.quietHoursEnd)}',
                   icon: Icons.schedule_rounded,
                   color: accentPurple,
-                  onTap: () => _showQuietHoursPicker(context, settings, notifier),
+                  onTap: () =>
+                      _showQuietHoursPicker(context, settings, notifier),
                 ),
                 _buildDivider(isDark),
                 SettingsTile(
@@ -620,11 +649,17 @@ class _HabitNotificationSettingsScreenState
                   value: settings.quietHoursDays.isEmpty
                       ? 'Every day'
                       : settings.quietHoursDays
-                          .map((d) => HabitNotificationSettings.getWeekdayShortName(d))
-                          .join(', '),
+                            .map(
+                              (d) =>
+                                  HabitNotificationSettings.getWeekdayShortName(
+                                    d,
+                                  ),
+                            )
+                            .join(', '),
                   icon: Icons.calendar_today_rounded,
                   color: accentPurple,
-                  onTap: () => _showQuietHoursDaysPicker(context, settings, notifier),
+                  onTap: () =>
+                      _showQuietHoursDaysPicker(context, settings, notifier),
                 ),
                 _buildDivider(isDark),
                 SettingsToggle(
@@ -633,7 +668,8 @@ class _HabitNotificationSettingsScreenState
                   value: settings.allowSpecialDuringQuietHours,
                   icon: Icons.star_rounded,
                   color: AppColorSchemes.warning,
-                  onChanged: (val) => notifier.setAllowSpecialDuringQuietHours(val),
+                  onChanged: (val) =>
+                      notifier.setAllowSpecialDuringQuietHours(val),
                   compact: true,
                 ),
               ],
@@ -691,7 +727,10 @@ class _HabitNotificationSettingsScreenState
           child: Column(
             children: [
               ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 leading: Container(
                   width: 44,
                   height: 44,
@@ -717,7 +756,10 @@ class _HabitNotificationSettingsScreenState
                   ),
                 ),
                 trailing: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColorSchemes.primaryGold,
                     borderRadius: BorderRadius.circular(8),
@@ -779,7 +821,8 @@ class _HabitNotificationSettingsScreenState
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => const HabitNotificationDiagnosticsScreen(),
+                          builder: (context) =>
+                              const HabitNotificationDiagnosticsScreen(),
                         ),
                       );
                     },
@@ -787,9 +830,13 @@ class _HabitNotificationSettingsScreenState
                     label: const Text('Habit Diagnostics'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: theme.colorScheme.secondary,
-                      side: BorderSide(color: theme.colorScheme.secondary.withOpacity(0.5)),
+                      side: BorderSide(
+                        color: theme.colorScheme.secondary.withOpacity(0.5),
+                      ),
                       padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                 ),
@@ -804,7 +851,9 @@ class _HabitNotificationSettingsScreenState
                       foregroundColor: AppColorSchemes.error,
                       side: const BorderSide(color: AppColorSchemes.error),
                       padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                 ),
@@ -865,7 +914,9 @@ class _HabitNotificationSettingsScreenState
                       Text(
                         '${notifier.grantedPermissionCount}/${notifier.totalPermissionCount} permissions granted',
                         style: TextStyle(
-                          color: notifier.permissionStatusColor.withOpacity(0.8),
+                          color: notifier.permissionStatusColor.withOpacity(
+                            0.8,
+                          ),
                           fontSize: 12,
                         ),
                       ),
@@ -1014,9 +1065,12 @@ class _HabitNotificationSettingsScreenState
     bool isSecondary = false,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
-    final backgroundColor =
-        isSecondary ? colorScheme.surfaceContainerLow : AppColorSchemes.primaryGold;
-    final textColor = isSecondary ? colorScheme.onSurface : colorScheme.onPrimary;
+    final backgroundColor = isSecondary
+        ? colorScheme.surfaceContainerLow
+        : AppColorSchemes.primaryGold;
+    final textColor = isSecondary
+        ? colorScheme.onSurface
+        : colorScheme.onPrimary;
 
     return SizedBox(
       width: double.infinity,
@@ -1028,7 +1082,9 @@ class _HabitNotificationSettingsScreenState
           foregroundColor: textColor,
           elevation: isSecondary ? 0 : 4,
           shadowColor: AppColorSchemes.primaryGold.withOpacity(0.3),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
         ),
         child: isLoading
             ? const SizedBox(
@@ -1043,7 +1099,10 @@ class _HabitNotificationSettingsScreenState
                   const SizedBox(width: 12),
                   Text(
                     label,
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                    ),
                   ),
                 ],
               ),
@@ -1063,10 +1122,7 @@ class _HabitNotificationSettingsScreenState
         Icon(icon, size: 20, color: colorScheme.onSurfaceVariant),
         const SizedBox(width: 12),
         Expanded(
-          child: Text(
-            label,
-            style: TextStyle(color: colorScheme.onSurface),
-          ),
+          child: Text(label, style: TextStyle(color: colorScheme.onSurface)),
         ),
         Text(
           value,
@@ -1125,7 +1181,9 @@ class _HabitNotificationSettingsScreenState
       title: 'Default Snooze Duration',
       options: HabitNotificationSettings.availableSnoozeOptions.map((duration) {
         return _PickerOption(
-          label: HabitNotificationSettings.getSnoozeDurationDisplayName(duration),
+          label: HabitNotificationSettings.getSnoozeDurationDisplayName(
+            duration,
+          ),
           isSelected: settings.defaultSnoozeDuration == duration,
           onTap: () => notifier.setDefaultSnoozeDuration(duration),
         );
@@ -1186,40 +1244,44 @@ class _HabitNotificationSettingsScreenState
           child: _PickerSheet(
             title: 'Quiet Hours Schedule',
             child: Column(
-            children: [
-              ListTile(
-                title: const Text('Start Time'),
-                subtitle: Text(
-                  HabitNotificationSettings.formatMinutesToTime(settings.quietHoursStart),
+              children: [
+                ListTile(
+                  title: const Text('Start Time'),
+                  subtitle: Text(
+                    HabitNotificationSettings.formatMinutesToTime(
+                      settings.quietHoursStart,
+                    ),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _pickTime(
+                    context,
+                    settings.quietHoursStart,
+                    (minutes) => notifier.setQuietHoursStart(minutes),
+                  ),
                 ),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => _pickTime(
-                  context,
-                  settings.quietHoursStart,
-                  (minutes) => notifier.setQuietHoursStart(minutes),
+                const SizedBox(height: 8),
+                ListTile(
+                  title: const Text('End Time'),
+                  subtitle: Text(
+                    HabitNotificationSettings.formatMinutesToTime(
+                      settings.quietHoursEnd,
+                    ),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _pickTime(
+                    context,
+                    settings.quietHoursEnd,
+                    (minutes) => notifier.setQuietHoursEnd(minutes),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              ListTile(
-                title: const Text('End Time'),
-                subtitle: Text(
-                  HabitNotificationSettings.formatMinutesToTime(settings.quietHoursEnd),
+                const SizedBox(height: 8),
+                Text(
+                  'Tap a time to adjust',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => _pickTime(
-                  context,
-                  settings.quietHoursEnd,
-                  (minutes) => notifier.setQuietHoursEnd(minutes),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Tap a time to adjust',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
+              ],
             ),
           ),
         );
@@ -1246,49 +1308,55 @@ class _HabitNotificationSettingsScreenState
             child: _PickerSheet(
               title: 'Quiet Hours Days',
               child: Column(
-              children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: List.generate(7, (index) {
-                    final day = index + 1;
-                    final isSelected = selectedDays.contains(day);
-                    return FilterChip(
-                      label: Text(HabitNotificationSettings.getWeekdayShortName(day)),
-                      selected: isSelected,
-                      onSelected: (selected) {
-                        setSheetState(() {
-                          if (selected) {
-                            selectedDays.add(day);
-                          } else {
-                            selectedDays.remove(day);
-                          }
-                          selectedDays.sort();
-                        });
-                        notifier.setQuietHoursDays(selectedDays);
-                      },
-                      selectedColor: AppColorSchemes.primaryGold.withOpacity(0.3),
-                      checkmarkColor: AppColorSchemes.primaryGold,
-                      backgroundColor: theme.colorScheme.surfaceContainerLow,
-                      labelStyle: TextStyle(
-                        color: isSelected
-                            ? AppColorSchemes.primaryGold
-                            : theme.colorScheme.onSurface,
-                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                      ),
-                    );
-                  }),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  selectedDays.isEmpty
-                      ? 'Quiet hours active every day'
-                      : 'Quiet hours active on selected days only',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: List.generate(7, (index) {
+                      final day = index + 1;
+                      final isSelected = selectedDays.contains(day);
+                      return FilterChip(
+                        label: Text(
+                          HabitNotificationSettings.getWeekdayShortName(day),
+                        ),
+                        selected: isSelected,
+                        onSelected: (selected) {
+                          setSheetState(() {
+                            if (selected) {
+                              selectedDays.add(day);
+                            } else {
+                              selectedDays.remove(day);
+                            }
+                            selectedDays.sort();
+                          });
+                          notifier.setQuietHoursDays(selectedDays);
+                        },
+                        selectedColor: AppColorSchemes.primaryGold.withOpacity(
+                          0.3,
+                        ),
+                        checkmarkColor: AppColorSchemes.primaryGold,
+                        backgroundColor: theme.colorScheme.surfaceContainerLow,
+                        labelStyle: TextStyle(
+                          color: isSelected
+                              ? AppColorSchemes.primaryGold
+                              : theme.colorScheme.onSurface,
+                          fontWeight: isSelected
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      );
+                    }),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 16),
+                  Text(
+                    selectedDays.isEmpty
+                        ? 'Quiet hours active every day'
+                        : 'Quiet hours active on selected days only',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ),
           );
@@ -1332,7 +1400,9 @@ class _HabitNotificationSettingsScreenState
         child: _PickerSheet(
           title: title,
           child: Column(
-            children: options.map((opt) => _PickerOptionTile(option: opt)).toList(),
+            children: options
+                .map((opt) => _PickerOptionTile(option: opt))
+                .toList(),
           ),
         ),
       ),
@@ -1417,7 +1487,9 @@ class _HabitNotificationSettingsScreenState
         if (success && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Special habit alarm will ring in 3 seconds...'),
+              content: const Text(
+                'Special habit alarm will ring in 3 seconds...',
+              ),
               behavior: SnackBarBehavior.floating,
               backgroundColor: AppColorSchemes.error,
             ),
@@ -1451,7 +1523,9 @@ class _HabitNotificationSettingsScreenState
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Reset to Defaults'),
-        content: const Text('Reset all habit notification settings to defaults?'),
+        content: const Text(
+          'Reset all habit notification settings to defaults?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -1543,7 +1617,9 @@ class _PickerSheet extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             title,
-            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
           ),
           const SizedBox(height: 16),
           Flexible(child: SingleChildScrollView(child: child)),
@@ -1581,7 +1657,10 @@ class _PickerOptionTile extends StatelessWidget {
       title: Text(option.label),
       trailing: option.isSelected
           ? Icon(Icons.check_circle_rounded, color: theme.colorScheme.primary)
-          : Icon(Icons.circle_outlined, color: theme.colorScheme.onSurfaceVariant),
+          : Icon(
+              Icons.circle_outlined,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
     );
   }
 }
@@ -1614,7 +1693,10 @@ class _PermissionRow extends StatelessWidget {
         color: theme.colorScheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(12),
         border: isCritical && !isGranted
-            ? Border.all(color: AppColorSchemes.warning.withOpacity(0.3), width: 1)
+            ? Border.all(
+                color: AppColorSchemes.warning.withOpacity(0.3),
+                width: 1,
+              )
             : null,
       ),
       child: Row(
@@ -1631,12 +1713,20 @@ class _PermissionRow extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Text(title,
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
                     if (isCritical && !isGranted) ...[
                       const SizedBox(width: 6),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 1,
+                        ),
                         decoration: BoxDecoration(
                           color: AppColorSchemes.warning.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(4),

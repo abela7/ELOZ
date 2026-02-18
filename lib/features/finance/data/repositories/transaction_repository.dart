@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import '../../../../core/data/history_optimization_models.dart';
+import '../../../../core/utils/perf_trace.dart';
 import '../../../../data/local/hive/hive_service.dart';
 import '../models/transaction.dart';
 
@@ -56,12 +57,15 @@ class TransactionRepository {
     if (_cachedBox != null && _cachedBox!.isOpen) {
       return _cachedBox!;
     }
+    final trace = PerfTrace('FinanceRepo._getTransactionsBox');
     final opener = _transactionBoxOpener;
     if (opener != null) {
       _cachedBox = await opener();
+      trace.end('opened', details: {'records': _cachedBox?.length ?? 0});
       return _cachedBox!;
     }
     _cachedBox = await HiveService.getBox<Transaction>(boxName);
+    trace.end('opened', details: {'records': _cachedBox?.length ?? 0});
     return _cachedBox!;
   }
 
@@ -110,13 +114,35 @@ class TransactionRepository {
   }
 
   Future<List<Transaction>> getTransactionsForDate(DateTime date) async {
+    final trace = PerfTrace('FinanceRepo.getTransactionsForDate');
     await _ensureIndexesReady();
+    trace.step(
+      'indexes_ready',
+      details: {
+        'useIndexes': _useIndexedReads,
+        'indexedFrom': _indexedFromDate == null
+            ? 'null'
+            : _dateKey(_indexedFromDate!),
+        'backfillComplete': _backfillComplete,
+      },
+    );
     final box = await _getBox();
+    trace.step('transactions_box_ready', details: {'records': box.length});
     if (!_useIndexedReads || !_isDateWithinIndexedRange(date)) {
-      return _scanTransactionsForDate(box.values, date);
+      final scanned = _scanTransactionsForDate(box.values, date);
+      trace.end(
+        'done',
+        details: {
+          'mode': 'scan',
+          'date': _dateKey(date),
+          'result': scanned.length,
+        },
+      );
+      return scanned;
     }
 
     final ids = _readStringList((await _getDateIndexBox()).get(_dateKey(date)));
+    trace.step('index_ids_ready', details: {'ids': ids.length});
     final transactions = <Transaction>[];
     for (final id in ids) {
       final transaction = box.get(id);
@@ -125,6 +151,14 @@ class TransactionRepository {
         transactions.add(transaction);
       }
     }
+    trace.end(
+      'done',
+      details: {
+        'mode': 'indexed',
+        'date': _dateKey(date),
+        'result': transactions.length,
+      },
+    );
     return transactions;
   }
 
@@ -132,22 +166,50 @@ class TransactionRepository {
     DateTime startDate,
     DateTime endDate,
   ) async {
+    final trace = PerfTrace('FinanceRepo.getTransactionsInRange');
     await _ensureIndexesReady();
     final startOnly = _dateOnly(startDate);
     final endOnly = _dateOnly(endDate);
     if (endOnly.isBefore(startOnly)) {
+      trace.end(
+        'invalid_range',
+        details: {'start': _dateKey(startOnly), 'end': _dateKey(endOnly)},
+      );
       return const <Transaction>[];
     }
 
     final box = await _getBox();
+    trace.step(
+      'inputs_ready',
+      details: {
+        'start': _dateKey(startOnly),
+        'end': _dateKey(endOnly),
+        'useIndexes': _useIndexedReads,
+        'indexedFrom': _indexedFromDate == null
+            ? 'null'
+            : _dateKey(_indexedFromDate!),
+        'records': box.length,
+      },
+    );
     if (!_useIndexedReads) {
-      return _scanTransactionsInRange(box.values, startOnly, endOnly);
+      final scanned = _scanTransactionsInRange(box.values, startOnly, endOnly);
+      trace.end('done', details: {'mode': 'scan', 'result': scanned.length});
+      return scanned;
     }
 
     if (!_isRangeFullyIndexed(startOnly, endOnly)) {
       final indexedFrom = _indexedFromDate;
       if (indexedFrom == null) {
-        return _scanTransactionsInRange(box.values, startOnly, endOnly);
+        final scanned = _scanTransactionsInRange(
+          box.values,
+          startOnly,
+          endOnly,
+        );
+        trace.end(
+          'done',
+          details: {'mode': 'scan_no_indexed_from', 'result': scanned.length},
+        );
+        return scanned;
       }
 
       final out = <Transaction>[];
@@ -157,6 +219,14 @@ class TransactionRepository {
             ? endOnly
             : dayBeforeIndexed;
         out.addAll(_scanTransactionsInRange(box.values, startOnly, olderEnd));
+        trace.step(
+          'mixed_scan_part',
+          details: {
+            'scanStart': _dateKey(startOnly),
+            'scanEnd': _dateKey(olderEnd),
+            'partialCount': out.length,
+          },
+        );
       }
 
       if (!endOnly.isBefore(indexedFrom)) {
@@ -164,11 +234,22 @@ class TransactionRepository {
             ? indexedFrom
             : startOnly;
         out.addAll(await _readIndexedRange(indexedStart, endOnly));
+        trace.step(
+          'mixed_index_part',
+          details: {
+            'indexStart': _dateKey(indexedStart),
+            'indexEnd': _dateKey(endOnly),
+            'partialCount': out.length,
+          },
+        );
       }
+      trace.end('done', details: {'mode': 'mixed', 'result': out.length});
       return out;
     }
 
-    return _readIndexedRange(startOnly, endOnly);
+    final indexed = await _readIndexedRange(startOnly, endOnly);
+    trace.end('done', details: {'mode': 'indexed', 'result': indexed.length});
+    return indexed;
   }
 
   Future<List<Transaction>> getTransactionsUpToDate(DateTime date) async {
@@ -329,14 +410,20 @@ class TransactionRepository {
   Future<bool> backfillNextChunk({
     int chunkDays = _defaultBackfillChunkDays,
   }) async {
+    final trace = PerfTrace('FinanceRepo.backfillNextChunk');
     await _ensureIndexesReady();
-    if (!_useIndexedReads) return false;
+    if (!_useIndexedReads) {
+      trace.end('skip_scan_fallback');
+      return false;
+    }
 
     final meta = await _getIndexMetaBox();
     if (meta.get(_backfillPausedMetaKey) == true) {
+      trace.end('skip_paused');
       return false;
     }
     if (meta.get(_backfillCompleteMetaKey) == true) {
+      trace.end('skip_complete');
       return false;
     }
 
@@ -344,11 +431,13 @@ class TransactionRepository {
     final oldestData = _parseDateKey('${meta.get(_oldestDataMetaKey)}');
     if (indexedFrom == null || oldestData == null) {
       await meta.put(_rebuildNeededMetaKey, true);
+      trace.end('missing_meta');
       return false;
     }
     if (!indexedFrom.isAfter(oldestData)) {
       await meta.put(_backfillCompleteMetaKey, true);
       _backfillComplete = true;
+      trace.end('already_caught_up');
       return false;
     }
 
@@ -388,6 +477,15 @@ class TransactionRepository {
     await meta.put(_backfillCompleteMetaKey, isComplete);
     _indexedFromDate = newIndexedFrom;
     _backfillComplete = isComplete;
+    trace.end(
+      'done',
+      details: {
+        'chunkDays': chunkDays,
+        'chunkStart': _dateKey(chunkStart),
+        'chunkEnd': _dateKey(chunkEnd),
+        'isComplete': isComplete,
+      },
+    );
     return true;
   }
 
@@ -453,15 +551,21 @@ class TransactionRepository {
   }
 
   Future<Box<dynamic>> _openDynamicBox(String boxName) async {
+    final trace = PerfTrace('FinanceRepo._openDynamicBox');
     final opener = _dynamicBoxOpener;
     if (opener != null) {
-      return opener(boxName);
+      final box = await opener(boxName);
+      trace.end('opened', details: {'box': boxName, 'records': box.length});
+      return box;
     }
-    return HiveService.getBox<dynamic>(boxName);
+    final box = await HiveService.getBox<dynamic>(boxName);
+    trace.end('opened', details: {'box': boxName, 'records': box.length});
+    return box;
   }
 
   Future<void> _ensureIndexesReady() async {
     if (_indexesReady) return;
+    final trace = PerfTrace('FinanceRepo.ensureIndexesReady');
     final meta = await _getIndexMetaBox();
     final version = _asInt(meta.get('version'));
     final rebuildNeeded = meta.get(_rebuildNeededMetaKey) == true;
@@ -469,6 +573,14 @@ class TransactionRepository {
         meta.get(_indexedFromMetaKey) is String &&
         meta.get(_oldestDataMetaKey) is String;
     var attemptedRebuild = false;
+    trace.step(
+      'meta_loaded',
+      details: {
+        'version': version,
+        'rebuildNeeded': rebuildNeeded,
+        'hasBootstrapWindow': hasBootstrapWindow,
+      },
+    );
 
     if (version != _indexVersion || rebuildNeeded || !hasBootstrapWindow) {
       final reason = version != _indexVersion
@@ -479,14 +591,17 @@ class TransactionRepository {
       await _bootstrapRecentWindowIndexes(reason: reason);
       await meta.put('version', _indexVersion);
       attemptedRebuild = true;
+      trace.step('bootstrap_rebuild', details: {'reason': reason});
     }
 
     if (!_integrityChecked) {
       var valid = await _hasValidIndexes();
+      trace.step('integrity_checked', details: {'valid': valid});
       if (!valid && !attemptedRebuild) {
         await _bootstrapRecentWindowIndexes(reason: 'integrity_mismatch');
         await meta.put('version', _indexVersion);
         valid = await _hasValidIndexes();
+        trace.step('integrity_rebuild_retry', details: {'valid': valid});
       }
 
       if (!valid) {
@@ -505,6 +620,16 @@ class TransactionRepository {
     }
 
     _indexesReady = true;
+    trace.end(
+      'done',
+      details: {
+        'useIndexes': _useIndexedReads,
+        'backfillComplete': _backfillComplete,
+        'indexedFrom': _indexedFromDate == null
+            ? 'null'
+            : _dateKey(_indexedFromDate!),
+      },
+    );
   }
 
   Future<bool> _hasValidIndexes() async {
@@ -992,7 +1117,7 @@ class TransactionRepository {
   }
 
   void _debugLog(String message) {
-    if (!kDebugMode) return;
+    if (!(kDebugMode || kProfileMode)) return;
     debugPrint('[TransactionRepository] $message');
   }
 }

@@ -82,7 +82,7 @@ class HabitNotificationCreatorContext {
       variables: _habitVariables,
       availableActions: [
         NotificationCreatorAction(
-          actionId: 'done',
+          actionId: 'mark_done',
           label: 'Done',
           iconCodePoint: Icons.check_circle_rounded.codePoint,
           iconFontFamily: 'MaterialIcons',
@@ -119,7 +119,7 @@ class HabitNotificationCreatorContext {
         actionsEnabled: true,
         actions: [
           NotificationCreatorAction(
-            actionId: 'done',
+            actionId: 'mark_done',
             label: 'Done',
             iconCodePoint: Icons.check_circle_rounded.codePoint,
             iconFontFamily: 'MaterialIcons',

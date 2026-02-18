@@ -5,8 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/theme/color_schemes.dart';
 import '../../../../core/services/alarm_service.dart';
-import '../../../../core/services/notification_service.dart';
+import '../../../../core/services/reminder_manager.dart';
 import '../../../../core/providers/notification_settings_provider.dart';
+import '../../../../core/notifications/models/notification_hub_modules.dart';
 import '../../../../data/models/task.dart';
 import '../../../../data/models/subtask.dart';
 import '../../../../core/models/reminder.dart';
@@ -163,8 +164,8 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
   /// 
   /// This tries (in order):
   /// 1) Direct taskId (if provided)
-  /// 2) Resolve task by alarmId
-  /// 3) Resolve habit by alarmId (if no task found)
+  /// 2) Resolve by alarmId using module-aware ID ranges
+  /// 3) Fallback legacy scan (task first, then habit) if range is unknown
   /// 
   /// NOTE: We avoid touching the alarm system itself; this is a safe, UI-only
   /// lookup to restore full functionality (Done/Not Done/Postpone/Skip/etc).
@@ -176,15 +177,25 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
       if (widget.taskId != null) {
         task = await TaskRepository().getTaskById(widget.taskId!);
       }
-      
-      // If no taskId provided, attempt to resolve by alarmId
-      if (task == null && widget.alarmId != null) {
-        task = await _findTaskByAlarmId(widget.alarmId!);
-      }
 
-      // If still no task found, try to find a habit by alarmId
+      // If no explicit taskId provided, resolve by alarmId.
+      // Notification IDs now live in module-specific ranges:
+      // task: 1..99999, habit: 100000..199999.
       if (task == null && widget.alarmId != null) {
-        habit = await _findHabitByAlarmId(widget.alarmId!);
+        final alarmId = widget.alarmId!;
+        final inferredModule = _moduleIdForAlarmId(alarmId);
+
+        if (inferredModule == NotificationHubModuleIds.task) {
+          task = await _findTaskByAlarmId(alarmId);
+        } else if (inferredModule == NotificationHubModuleIds.habit) {
+          habit = await _findHabitByAlarmId(alarmId);
+        } else {
+          // Legacy fallback (pre-range IDs): best-effort scan.
+          task = await _findTaskByAlarmId(alarmId);
+          if (task == null) {
+            habit = await _findHabitByAlarmId(alarmId);
+          }
+        }
       }
       
       if (mounted) {
@@ -342,7 +353,10 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
         '${date.month.toString().padLeft(2, '0')}'
         '${date.day.toString().padLeft(2, '0')}';
     final combined = '$base-$dateKey';
-    return combined.hashCode.abs() % 2147483647;
+    return _mapHashToModuleRange(
+      combined.hashCode.abs(),
+      NotificationHubModuleIds.habit,
+    );
   }
 
   /// Replicates NotificationService._generateNotificationId
@@ -352,7 +366,41 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
     final combined = customMs != null
         ? '$taskId-${reminder.type}-custom-$customMs'
         : '$taskId-${reminder.type}-${reminder.value}-${reminder.unit}';
-    return combined.hashCode.abs() % 2147483647;
+    return _mapHashToModuleRange(
+      combined.hashCode.abs(),
+      NotificationHubModuleIds.task,
+    );
+  }
+
+  /// Keep module inference aligned with NotificationHubIdRanges.
+  String? _moduleIdForAlarmId(int alarmId) {
+    if (alarmId >= NotificationHubIdRanges.taskStart &&
+        alarmId <= NotificationHubIdRanges.taskEnd) {
+      return NotificationHubModuleIds.task;
+    }
+    if (alarmId >= NotificationHubIdRanges.habitStart &&
+        alarmId <= NotificationHubIdRanges.habitEnd) {
+      return NotificationHubModuleIds.habit;
+    }
+    return null;
+  }
+
+  /// Keep hash->ID mapping aligned with NotificationService._generateNotificationId.
+  int _mapHashToModuleRange(int hash, String moduleId) {
+    late final int rangeStart;
+    late final int rangeSize;
+
+    if (moduleId == NotificationHubModuleIds.habit) {
+      rangeStart = NotificationHubIdRanges.habitStart;
+      rangeSize =
+          NotificationHubIdRanges.habitEnd - NotificationHubIdRanges.habitStart + 1;
+    } else {
+      rangeStart = NotificationHubIdRanges.taskStart;
+      rangeSize =
+          NotificationHubIdRanges.taskEnd - NotificationHubIdRanges.taskStart + 1;
+    }
+
+    return rangeStart + (hash % rangeSize);
   }
 
   void _enterFullScreen() {
@@ -483,7 +531,19 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
     HapticFeedback.mediumImpact();
     
     await _stopAlarm();
-    
+
+    final isFallbackAlarm = (widget.alarmId ?? 0) <= 0 && widget.taskId == null;
+    if (!_hasEntity && !isFallbackAlarm) {
+      debugPrint(
+        '⚠️ AlarmScreen: Done tapped but no linked task/habit found for alarmId=${widget.alarmId}',
+      );
+      if (mounted) {
+        setState(() => _isProcessing = false);
+        _showErrorSnackbar('Could not find linked task/habit');
+      }
+      return;
+    }
+
     try {
       if (_habit != null) {
         // Guard: don't double-complete if habit was already done today
@@ -499,7 +559,7 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
           await ref.read(habitNotifierProvider.notifier)
               .completeHabitForDate(_habit!.id, today);
 
-          await NotificationService().cancelAllHabitReminders(_habit!.id);
+          await ReminderManager().cancelRemindersForHabit(_habit!.id);
           debugPrint('✅ AlarmScreen: Habit "${_habit!.title}" marked complete!');
         }
       } else if (_task != null) {
@@ -507,7 +567,7 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
         await ref.read(taskNotifierProvider.notifier).completeTask(_task!.id);
         
         // Cancel all remaining reminders for this task
-        await NotificationService().cancelAllTaskReminders(_task!.id);
+        await ReminderManager().cancelRemindersForTask(_task!.id);
         
         debugPrint('✅ AlarmScreen: Task "${_task!.title}" marked complete!');
       }
@@ -546,6 +606,18 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
       await _closeSecurely();
       return;
     }
+
+    final isFallbackAlarm = (widget.alarmId ?? 0) <= 0 && widget.taskId == null;
+    if (!_hasEntity && !isFallbackAlarm) {
+      debugPrint(
+        '⚠️ AlarmScreen: Snooze tapped but no linked task/habit found for alarmId=${widget.alarmId}',
+      );
+      if (mounted) {
+        setState(() => _isProcessing = false);
+        _showErrorSnackbar('Could not find linked task/habit');
+      }
+      return;
+    }
     
     try {
       // Persist snooze state to task/habit if available
@@ -557,6 +629,15 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
       
       // Reschedule the alarm
       final snoozeTime = DateTime.now().add(Duration(minutes: minutes));
+      final snoozeCount = _snoozeCountForToday();
+      final snoozedBody = _buildSnoozedBody(
+        snoozedUntil: snoozeTime,
+        snoozeCount: snoozeCount,
+      );
+      final snoozePayload = _buildSnoozePayload(
+        minutes: minutes,
+        snoozeCount: snoozeCount,
+      );
 
       // Use habit settings if this is a habit alarm
       String soundId;
@@ -577,11 +658,12 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
       await AlarmService().scheduleSpecialTaskAlarm(
         id: widget.alarmId ?? DateTime.now().millisecondsSinceEpoch % 2147483647,
         title: _entityTitle,
-        body: '(Snoozed) $_entityDescription',
+        body: snoozedBody,
         scheduledTime: snoozeTime,
         soundId: soundId,
         vibrationPatternId: vibrationPatternId,
         showFullscreen: showFullscreen,
+        payload: snoozePayload,
         iconCodePoint: _habit?.iconCodePoint ?? _task?.iconCodePoint ?? widget.iconCodePoint,
         iconFontFamily: _habit?.iconFontFamily ?? _task?.iconFontFamily ?? widget.iconFontFamily,
         iconFontPackage: _habit?.iconFontPackage ?? _task?.iconFontPackage ?? widget.iconFontPackage,
@@ -664,7 +746,7 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
       try {
         // EXACT same call as TaskReminderPopup - use the provider directly
         await ref.read(taskNotifierProvider.notifier).markNotDone(_task!.id, reason);
-        await NotificationService().cancelAllTaskReminders(_task!.id);
+        await ReminderManager().cancelRemindersForTask(_task!.id);
         
         debugPrint('❌ AlarmScreen: Task "${_task!.title}" marked as not done with reason: $reason');
         
@@ -739,7 +821,7 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
             reason,
             penalty: penalty,
           );
-          await NotificationService().cancelAllTaskReminders(_task!.id);
+          await ReminderManager().cancelRemindersForTask(_task!.id);
           
           debugPrint('📅 AlarmScreen: Task postponed to $newDate');
           
@@ -855,6 +937,7 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
       );
 
       await HabitRepository().updateHabit(updatedHabit);
+      ref.read(habitNotifierProvider.notifier).loadHabits();
 
       if (mounted) {
         setState(() => _habit = updatedHabit);
@@ -864,6 +947,66 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
     } catch (e) {
       debugPrint('⚠️ AlarmScreen: Failed to persist snooze to habit: $e');
     }
+  }
+
+  int _snoozeCountForToday() {
+    final raw = ((_habit?.snoozeHistory) ?? (_task?.snoozeHistory) ?? '').trim();
+    if (raw.isEmpty) return 0;
+
+    final now = DateTime.now();
+    final todayKey = '${now.year.toString().padLeft(4, '0')}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return 0;
+
+      var count = 0;
+      for (final entry in decoded) {
+        if (entry is! Map) continue;
+        final map = Map<String, dynamic>.from(entry);
+
+        final occurrenceDate = map['occurrenceDate'] as String?;
+        if (occurrenceDate != null && occurrenceDate == todayKey) {
+          count++;
+          continue;
+        }
+
+        final at = map['at'] as String?;
+        if (at == null || at.isEmpty) continue;
+        final dt = DateTime.tryParse(at);
+        if (dt == null) continue;
+        if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+          count++;
+        }
+      }
+      return count;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  String _buildSnoozedBody({
+    required DateTime snoozedUntil,
+    required int snoozeCount,
+  }) {
+    final hh = snoozedUntil.hour.toString().padLeft(2, '0');
+    final mm = snoozedUntil.minute.toString().padLeft(2, '0');
+    return '(Snoozed) $snoozeCount - $hh:$mm';
+  }
+
+  String _buildSnoozePayload({
+    required int minutes,
+    required int snoozeCount,
+  }) {
+    if (_habit != null) {
+      return 'habit|${_habit!.id}|snooze|$minutes|minutes|snoozeCount:$snoozeCount';
+    }
+    if (_task != null) {
+      return 'task|${_task!.id}|snooze|$minutes|minutes|snoozeCount:$snoozeCount';
+    }
+    return '';
   }
 
   /// Load habit notification settings
@@ -911,7 +1054,7 @@ class _AlarmScreenState extends ConsumerState<AlarmScreen> with TickerProviderSt
       await ref.read(habitNotifierProvider.notifier)
           .skipHabitForDate(_habit!.id, DateTime.now(), reason: reason);
 
-      await NotificationService().cancelAllHabitReminders(_habit!.id);
+      await ReminderManager().cancelRemindersForHabit(_habit!.id);
 
       debugPrint('⏭️ AlarmScreen: Habit "${_habit!.title}" skipped!');
 

@@ -35,6 +35,7 @@ import '../../core/notifications/notification_hub.dart';
 import 'notifications/finance_notification_adapter.dart';
 import 'notifications/finance_notification_scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/utils/perf_trace.dart';
 
 /// Finance Module - Handles all Finance-related initialization
 ///
@@ -60,6 +61,7 @@ class FinanceModule {
     bool preOpenBoxes = true,
     bool bootstrapDefaults = true,
   }) async {
+    final trace = PerfTrace('FinanceModule.init');
     final inFlight = _initFuture;
     if (inFlight != null) {
       await inFlight;
@@ -72,6 +74,7 @@ class FinanceModule {
       if (!deferRecurringProcessing) {
         await _processRecurringTransactions();
       }
+      trace.end('joined_inflight');
       return;
     }
 
@@ -83,6 +86,7 @@ class FinanceModule {
     _initFuture = run;
     try {
       await run;
+      trace.end('done');
     } finally {
       if (identical(_initFuture, run)) {
         _initFuture = null;
@@ -161,6 +165,14 @@ class FinanceModule {
     }
   }
 
+  /// Call after a full data wipe to recreate default categories and a default
+  /// Cash account. Settings (currency, security, notifications) are preserved.
+  static Future<void> forceReinitializeDefaultsAfterWipe() async {
+    _defaultsInitialized = false;
+    await _preOpenBoxes();
+    await _initializeDefaultData();
+  }
+
   /// Run recurring transaction processing after startup.
   static Future<void> runPostStartupMaintenance() async {
     await init(
@@ -174,6 +186,7 @@ class FinanceModule {
 
   static Future<void> _preOpenBoxes() async {
     if (_boxesPreopened) return;
+    final trace = PerfTrace('FinanceModule.preOpenBoxes');
     await Future.wait([
       HiveService.getBox<Transaction>('transactionsBox'),
       HiveService.getBox<TransactionCategory>('transactionCategoriesBox'),
@@ -190,6 +203,7 @@ class FinanceModule {
     ], eagerError: true);
     // 'income_categories' box deprecated - using 'transaction_categories' instead
     _boxesPreopened = true;
+    trace.end('done');
   }
 
   static Future<void> _initializeDefaultData() async {

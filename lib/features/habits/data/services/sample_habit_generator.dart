@@ -1,9 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
-import '../../../../core/notifications/notification_hub.dart';
-import '../../../../core/notifications/notifications.dart';
-import '../../../../core/notifications/services/universal_notification_repository.dart';
 import '../../../../core/services/reminder_manager.dart';
 import '../../../../data/models/subtask.dart';
 import '../models/habit.dart';
@@ -895,12 +892,7 @@ class SampleHabitGenerator {
     for (final habit in allHabits) {
       if (sampleTitles.contains(habit.title)) {
         await _temptationLogRepository.deleteLogsForHabit(habit.id);
-        await ReminderManager().cancelRemindersForHabit(habit.id);
-        await NotificationHub().cancelForEntity(
-          moduleId: NotificationHubModuleIds.habit,
-          entityId: habit.id,
-        );
-        await UniversalNotificationRepository().deleteByEntity(habit.id);
+        await ReminderManager().handleHabitDeleted(habit.id);
         await _repository.deleteHabit(habit.id);
       }
     }

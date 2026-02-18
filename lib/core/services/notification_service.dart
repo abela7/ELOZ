@@ -27,8 +27,12 @@ import 'notification_handler.dart';
 import 'sound_player_service.dart';
 import 'alarm_service.dart';
 import 'icon_bitmap_generator.dart';
+import '../notifications/models/notification_hub_modules.dart';
 import '../notifications/models/notification_hub_schedule_request.dart';
 import '../notifications/services/notification_activity_logger.dart';
+import '../notifications/services/notification_flow_trace.dart';
+import '../notifications/services/notification_logical_key_helper.dart';
+import '../notifications/services/notification_module_policy.dart';
 
 /// Professional notification service with modern features
 ///
@@ -59,6 +63,12 @@ class NotificationService {
   static bool _timezoneDbInitialized = false;
 
   bool _initialized = false;
+  Completer<void>? _initializeCompleter;
+  static const String _prefsLastLaunchResponseSignatureKey =
+      'last_launch_response_signature_v1';
+  static const String _prefsLastLaunchResponseAtMsKey =
+      'last_launch_response_at_ms_v1';
+  static const Duration _launchResponseReplayWindow = Duration(minutes: 15);
 
   /// Cached notification settings (loaded from SharedPreferences)
   NotificationSettings _settings = NotificationSettings.defaults;
@@ -99,7 +109,7 @@ class NotificationService {
 
       await prefs.setString(_prefsTrackedNativeAlarmsKey, jsonEncode(entries));
       print(
-        '✅ NotificationService: Tracked native alarm entry (ID: $id, Total tracked: ${entries.length})',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService: Tracked native alarm entry (ID: $id, Total tracked: ${entries.length})',
       );
       print('   Title: ${entry['title']}');
       print('   Channel: ${entry['channelKey']}');
@@ -108,7 +118,9 @@ class NotificationService {
         '   Scheduled for: ${DateTime.fromMillisecondsSinceEpoch(entry['scheduledTimeMs'] as int)}',
       );
     } catch (e) {
-      print('⚠️ NotificationService: Failed to track native alarm entry: $e');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Failed to track native alarm entry: $e',
+      );
     }
   }
 
@@ -117,7 +129,7 @@ class NotificationService {
       final prefs = await SharedPreferences.getInstance();
       final raw = (prefs.getString(_prefsTrackedNativeAlarmsKey) ?? '').trim();
       if (raw.isEmpty) {
-        print('📋 NotificationService: No tracked native alarms found');
+        print('NotificationService: No tracked native alarms found');
         return const <Map<String, dynamic>>[];
       }
       final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
@@ -126,7 +138,7 @@ class NotificationService {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
       print(
-        '📋 NotificationService: Retrieved ${entries.length} tracked native alarm(s)',
+        'NotificationService: Retrieved ${entries.length} tracked native alarm(s)',
       );
       for (final e in entries) {
         final schedMs = e['scheduledTimeMs'] as int?;
@@ -137,7 +149,9 @@ class NotificationService {
       }
       return entries;
     } catch (e) {
-      print('⚠️ NotificationService: Error loading tracked native alarms: $e');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Error loading tracked native alarms: $e',
+      );
       return const <Map<String, dynamic>>[];
     }
   }
@@ -234,11 +248,11 @@ class NotificationService {
         jsonEncode(entries),
       );
       print(
-        '✅ NotificationService: Tracked Flutter notification entry (ID: $id, Total tracked: ${entries.length})',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService: Tracked Flutter notification entry (ID: $id, Total tracked: ${entries.length})',
       );
     } catch (e) {
       print(
-        '⚠️ NotificationService: Failed to track Flutter notification entry: $e',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Failed to track Flutter notification entry: $e',
       );
     }
   }
@@ -270,12 +284,12 @@ class NotificationService {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
       print(
-        '📋 NotificationService: Retrieved ${entries.length} tracked Flutter notification(s)',
+        'NotificationService: Retrieved ${entries.length} tracked Flutter notification(s)',
       );
       return entries;
     } catch (e) {
       print(
-        '⚠️ NotificationService: Error loading tracked Flutter notifications: $e',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Error loading tracked Flutter notifications: $e',
       );
       return const <Map<String, dynamic>>[];
     }
@@ -341,7 +355,7 @@ class NotificationService {
           jsonEncode(filtered),
         );
         print(
-          '🧹 NotificationService: Cleaned up ${entries.length - filtered.length} expired Flutter notification entries',
+          'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚Â§Ãƒâ€šÃ‚Â¹ NotificationService: Cleaned up ${entries.length - filtered.length} expired Flutter notification entries',
         );
       }
     } catch (_) {}
@@ -455,80 +469,126 @@ class NotificationService {
   /// Initialize the notification service
   Future<void> initialize({bool startupOptimized = false}) async {
     if (_initialized) return;
+    if (_initializeCompleter != null) {
+      return _initializeCompleter!.future;
+    }
+    _initializeCompleter = Completer<void>();
 
-    print('🔔 NotificationService: Starting initialization...');
+    try {
+      print('NotificationService: Starting initialization...');
 
-    // Load user settings
-    await _loadSettings();
-    print(
-      '🔔 NotificationService: Settings loaded - notificationsEnabled: ${_settings.notificationsEnabled}',
-    );
+      // Load user settings
+      await _loadSettings();
+      print(
+        'NotificationService: Settings loaded - notificationsEnabled: ${_settings.notificationsEnabled}',
+      );
 
-    // Load habit notification settings
-    await _loadHabitSettings();
-    print(
-      '🔔 NotificationService: Habit settings loaded - notificationsEnabled: ${_habitSettings.notificationsEnabled}',
-    );
+      // Load habit notification settings
+      await _loadHabitSettings();
+      print(
+        'NotificationService: Habit settings loaded - notificationsEnabled: ${_habitSettings.notificationsEnabled}',
+      );
 
-    // Configure timezone
-    await _configureTimezone();
+      // Configure timezone
+      await _configureTimezone();
 
-    // Android initialization
-    const androidSettings = AndroidInitializationSettings(
-      '@mipmap/ic_launcher',
-    );
+      // Android initialization
+      const androidSettings = AndroidInitializationSettings(
+        '@mipmap/ic_launcher',
+      );
 
-    // iOS initialization
-    const iosSettings = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
-    );
+      // iOS initialization
+      const iosSettings = DarwinInitializationSettings(
+        requestAlertPermission: true,
+        requestBadgePermission: true,
+        requestSoundPermission: true,
+      );
 
-    const initSettings = InitializationSettings(
-      android: androidSettings,
-      iOS: iosSettings,
-    );
+      const initSettings = InitializationSettings(
+        android: androidSettings,
+        iOS: iosSettings,
+      );
 
-    await _notificationsPlugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: (response) {
-        NotificationHandler().handleNotificationResponse(response);
-      },
-    );
+      await _notificationsPlugin.initialize(
+        initSettings,
+        onDidReceiveNotificationResponse: (response) {
+          NotificationHandler().handleNotificationResponse(response);
+        },
+      );
 
-    print('🔔 NotificationService: Plugin initialized');
+      print('NotificationService: Plugin initialized');
 
-    // Check if app was launched from a notification
-    final launchDetails = await _notificationsPlugin
-        .getNotificationAppLaunchDetails();
-    if (launchDetails != null && launchDetails.didNotificationLaunchApp) {
-      if (launchDetails.notificationResponse != null) {
-        NotificationHandler().handleNotificationResponse(
-          launchDetails.notificationResponse!,
-        );
+      // Check if app was launched from a notification.
+      // Dedupe to avoid replay on hot restart / duplicate startup init paths.
+      final launchDetails = await _notificationsPlugin
+          .getNotificationAppLaunchDetails();
+      if (launchDetails != null && launchDetails.didNotificationLaunchApp) {
+        final response = launchDetails.notificationResponse;
+        if (response != null &&
+            await _shouldProcessLaunchNotificationResponse(response)) {
+          NotificationHandler().handleNotificationResponse(response);
+        }
       }
+
+      // Request permissions. On app startup we don't block first interaction on this.
+      if (startupOptimized) {
+        unawaited(_requestPermissions());
+        print('NotificationService: Permissions requested (background)');
+      } else {
+        await _requestPermissions();
+        print('NotificationService: Permissions requested');
+      }
+
+      // Create notification channels for Android.
+      // Avoid force recreation at every app launch because deleting/recreating
+      // channels is expensive and can cause startup jank.
+      await _createNotificationChannels(forceRecreate: false);
+      print('NotificationService: Channels created');
+
+      // SoundPlayerService initializes lazily on first playback request.
+
+      _initialized = true;
+      print('NotificationService: Initialization complete');
+      _initializeCompleter?.complete();
+    } catch (e, st) {
+      _initializeCompleter?.completeError(e, st);
+      rethrow;
+    } finally {
+      _initializeCompleter = null;
     }
+  }
 
-    // Request permissions. On app startup we don't block first interaction on this.
-    if (startupOptimized) {
-      unawaited(_requestPermissions());
-      print('🔔 NotificationService: Permissions requested (background)');
-    } else {
-      await _requestPermissions();
-      print('🔔 NotificationService: Permissions requested');
+  Future<bool> _shouldProcessLaunchNotificationResponse(
+    NotificationResponse response,
+  ) async {
+    try {
+      final payload = response.payload ?? '';
+      final actionId = response.actionId ?? '';
+      final id = response.id ?? -1;
+      final signature = 'id:$id|action:$actionId|payload:$payload';
+
+      final prefs = await SharedPreferences.getInstance();
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final lastSig = prefs.getString(_prefsLastLaunchResponseSignatureKey);
+      final lastAt = prefs.getInt(_prefsLastLaunchResponseAtMsKey) ?? 0;
+
+      final isReplay =
+          lastSig == signature &&
+          (nowMs - lastAt) < _launchResponseReplayWindow.inMilliseconds;
+      if (isReplay) {
+        print(
+          'NotificationService: Skipping duplicate launch notification response',
+        );
+        return false;
+      }
+
+      await prefs.setString(_prefsLastLaunchResponseSignatureKey, signature);
+      await prefs.setInt(_prefsLastLaunchResponseAtMsKey, nowMs);
+      return true;
+    } catch (_) {
+      // If persistence fails, do not block valid launch handling.
+      return true;
     }
-
-    // Create notification channels for Android.
-    // Avoid force recreation at every app launch because deleting/recreating
-    // channels is expensive and can cause startup jank.
-    await _createNotificationChannels(forceRecreate: false);
-    print('🔔 NotificationService: Channels created');
-
-    // SoundPlayerService initializes lazily on first playback request.
-
-    _initialized = true;
-    print('🔔 NotificationService: ✅ Initialization complete');
   }
 
   /// Load notification settings from SharedPreferences
@@ -541,7 +601,9 @@ class NotificationService {
         _settings = NotificationSettings.fromJsonString(jsonString);
       }
     } catch (e) {
-      print('⚠️ NotificationService: Error loading settings: $e');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Error loading settings: $e',
+      );
       _settings = NotificationSettings.defaults;
     }
 
@@ -572,7 +634,9 @@ class NotificationService {
         _habitSettings = HabitNotificationSettings.fromJsonString(jsonString);
       }
     } catch (e) {
-      print('⚠️ NotificationService: Error loading habit settings: $e');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Error loading habit settings: $e',
+      );
       _habitSettings = HabitNotificationSettings.defaults;
     }
 
@@ -637,7 +701,7 @@ class NotificationService {
       // Context may be null during early init or headless engine (WorkManager)
       if (kDebugMode) {
         debugPrint(
-          '🔔 NotificationService: Permission request skipped (context unavailable): ${e.message}',
+          'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â NotificationService: Permission request skipped (context unavailable): ${e.message}',
         );
       }
     }
@@ -756,7 +820,9 @@ class NotificationService {
   /// changes these in-app, we delete + recreate the channels so changes take
   /// effect immediately.
   Future<void> _createNotificationChannels({bool forceRecreate = false}) async {
-    print('🔔 Creating notification channels (forceRecreate: $forceRecreate)');
+    print(
+      'NotificationService: Creating notification channels (forceRecreate: $forceRecreate)',
+    );
 
     final androidPlugin = _notificationsPlugin
         .resolvePlatformSpecificImplementation<
@@ -777,7 +843,9 @@ class NotificationService {
           previousTaskChannelId != resolvedTaskChannelId) {
         try {
           await androidPlugin.deleteNotificationChannel(previousTaskChannelId);
-          print('🔔 Deleted old task channel: $previousTaskChannelId');
+          print(
+            'NotificationService: Deleted old task channel: $previousTaskChannelId',
+          );
         } catch (_) {}
       }
       await prefs.setString(_prefsTaskChannelIdKey, resolvedTaskChannelId);
@@ -792,7 +860,9 @@ class NotificationService {
           previousHabitChannelId != resolvedHabitChannelId) {
         try {
           await androidPlugin.deleteNotificationChannel(previousHabitChannelId);
-          print('🔔 Deleted old habit channel: $previousHabitChannelId');
+          print(
+            'NotificationService: Deleted old habit channel: $previousHabitChannelId',
+          );
         } catch (_) {}
       }
       await prefs.setString(_prefsHabitChannelIdKey, resolvedHabitChannelId);
@@ -818,7 +888,7 @@ class NotificationService {
       for (final id in idsToDelete) {
         try {
           await androidPlugin.deleteNotificationChannel(id);
-          print('🔔 Deleted channel: $id');
+          print('NotificationService: Deleted channel: $id');
         } catch (_) {
           // Ignore if channel doesn't exist or cannot be deleted on this device.
         }
@@ -833,7 +903,7 @@ class NotificationService {
     final urgentPlaySound =
         _settings.soundEnabled && urgentSoundKey != 'silent';
 
-    print('🔔 Channel Settings:');
+    print('NotificationService: Channel Settings:');
     print('   - Sound Enabled: ${_settings.soundEnabled}');
     print('   - Vibration Enabled: ${_settings.vibrationEnabled}');
     print('   - LED Enabled: ${_settings.ledEnabled}');
@@ -968,7 +1038,7 @@ class NotificationService {
       // We don't necessarily delete the others every time to avoid minor blips,
       // but urgent_reminders MUST be reset to ensure Alarm audio usage applies.
     } catch (e) {
-      print('⚠️ Failed to delete channel: $e');
+      print('NotificationService: Failed to delete channel: $e');
     }
 
     await androidPlugin.createNotificationChannel(defaultChannel);
@@ -979,7 +1049,7 @@ class NotificationService {
     await androidPlugin.createNotificationChannel(habitSilentChannel);
 
     print(
-      '🔔 ✅ All channels created successfully (urgent_reminders recreated)',
+      'NotificationService: All channels created successfully (urgent_reminders recreated)',
     );
   }
 
@@ -994,22 +1064,33 @@ class NotificationService {
     required Task task,
     required Reminder reminder,
     bool forceAlarmMode = false,
+    String sourceFlow = 'task_runtime',
   }) async {
     if (!_initialized) await initialize();
     if (!reminder.enabled) return;
 
-    // Reload settings to get latest
-    await _loadSettings();
-
-    // Check if notifications are enabled
-    if (!_settings.notificationsEnabled) {
-      print('⚠️ NotificationService: Notifications disabled by user');
+    final policy = await NotificationModulePolicy.read(
+      NotificationHubModuleIds.task,
+    );
+    if (!policy.enabled) {
+      NotificationFlowTrace.log(
+        event: 'legacy_schedule_skipped',
+        sourceFlow: sourceFlow,
+        moduleId: NotificationHubModuleIds.task,
+        entityId: task.id,
+        reason: policy.reason,
+      );
       return;
     }
 
+    // Reload settings to get latest
+    await _loadSettings();
+
     final DateTime? taskDueDateTime = _getTaskDueDateTime(task);
     if (taskDueDateTime == null) {
-      print('⚠️ NotificationService: Task has no due date/time');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Task has no due date/time',
+      );
       return;
     }
 
@@ -1017,15 +1098,26 @@ class NotificationService {
       taskDueDateTime,
     );
     if (reminderTime == null) {
-      print('⚠️ NotificationService: Could not calculate reminder time');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Could not calculate reminder time',
+      );
       return;
     }
 
-    if (reminderTime.isBefore(DateTime.now())) {
-      print(
-        '⚠️ NotificationService: Reminder time is in the past: $reminderTime (now: ${DateTime.now()})',
-      );
-      return;
+    var effectiveReminderTime = reminderTime;
+    final now = DateTime.now();
+    if (reminderTime.isBefore(now)) {
+      // Editing around the exact trigger minute can put reminderTime a few
+      // seconds behind now. Grace that case instead of dropping the reminder.
+      final lag = now.difference(reminderTime);
+      if (lag <= const Duration(minutes: 1)) {
+        effectiveReminderTime = now.add(const Duration(seconds: 5));
+      } else {
+        print(
+          'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Task reminder time is in the past: $reminderTime',
+        );
+        return;
+      }
     }
 
     // Check if task is special
@@ -1034,18 +1126,54 @@ class NotificationService {
     // QUIET HOURS:
     // - If quiet hours are active at the reminder time, special tasks only proceed when
     //   "Allow Special Task Alerts" is enabled.
-    // - For normal tasks, quiet-hours filtering is enforced later inside `_scheduleNotification`.
-    final isQuietAtReminderTime = _settings.isInQuietHoursAt(reminderTime);
+    // - For normal tasks, defer to the next allowed slot.
+    final isQuietAtReminderTime = _settings.isInQuietHoursAt(
+      effectiveReminderTime,
+    );
     if (isQuietAtReminderTime &&
         isSpecialTask &&
         !_settings.allowUrgentDuringQuietHours) {
       print(
-        '🌙 NotificationService: Quiet hours active — blocking special task alert',
+        'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã¢â‚¬â„¢ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ NotificationService: Quiet hours active ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â blocking special task alert',
       );
       return;
     }
+    if (isQuietAtReminderTime && !isSpecialTask) {
+      final deferred = _nextAllowedTimeOutsideQuietHours(
+        candidate: effectiveReminderTime,
+        isInQuietHours: _settings.isInQuietHoursAt,
+      );
+      if (deferred != effectiveReminderTime) {
+        print(
+          'NotificationService: Quiet hours active, deferring task reminder '
+          'from $effectiveReminderTime to $deferred',
+        );
+        effectiveReminderTime = deferred;
+      }
+    }
 
-    final notificationId = _generateNotificationId(task.id, reminder);
+    final notificationId = _generateNotificationId(
+      task.id,
+      reminder,
+      moduleId: NotificationHubModuleIds.task,
+    );
+    NotificationFlowTrace.log(
+      event: 'legacy_schedule_request',
+      sourceFlow: sourceFlow,
+      moduleId: NotificationHubModuleIds.task,
+      entityId: task.id,
+      notificationId: notificationId,
+      details: <String, dynamic>{
+        'reminderType': reminder.type,
+        'reminderValue': reminder.value,
+        'reminderUnit': reminder.unit,
+      },
+    );
+    await cancelPendingNotificationById(
+      notificationId: notificationId,
+      entityId: task.id,
+      logActivity: false,
+    );
     final forceAlarmForSpecial =
         isSpecialTask && _settings.alwaysUseAlarmForSpecialTasks;
 
@@ -1085,11 +1213,11 @@ class NotificationService {
                 _isCustomSoundKey(channelSoundKey)));
 
     print(
-      '📅 NotificationService: Scheduling notification for "${task.title}"',
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService: Scheduling notification for "${task.title}"',
     );
     print('   Task due: $taskDueDateTime');
     print('   Reminder: ${reminder.getDescription()}');
-    print('   Notification will fire at: $reminderTime');
+    print('   Notification will fire at: $effectiveReminderTime');
     print('   Notification ID: $notificationId');
     print('   Is Special: $isSpecialTask');
     print('   Alarm Mode: $useAlarmMode');
@@ -1100,7 +1228,7 @@ class NotificationService {
     // Build notification body with category if enabled
     String body = _buildNotificationBody(task, reminder);
     if (_settings.showCategoryInNotification && task.categoryId != null) {
-      body = '📁 ${task.categoryId} • $body';
+      body = '${task.categoryId} - $body';
     }
 
     // Render templates
@@ -1116,16 +1244,24 @@ class NotificationService {
 
     // CRITICAL: Special tasks ALWAYS use AlarmService for maximum reliability
     if (isSpecialTask) {
-      print('🔔 Using AlarmService for special task (ALWAYS for reliability)');
-      print('   📝 Title: $renderedTitle');
-      print('   📝 Body: $renderedBody');
-      print('   📝 Icon: ${task.iconCodePoint}');
+      print(
+        'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Using AlarmService for special task (ALWAYS for reliability)',
+      );
+      print(
+        '   ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Title: $renderedTitle',
+      );
+      print(
+        '   ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Body: $renderedBody',
+      );
+      print(
+        '   ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Icon: ${task.iconCodePoint}',
+      );
 
       final success = await AlarmService().scheduleSpecialTaskAlarm(
         id: notificationId,
         title: renderedTitle,
         body: renderedBody,
-        scheduledTime: reminderTime,
+        scheduledTime: effectiveReminderTime,
         // Play the user-chosen special-task sound/vibration (not a hardcoded alarm.mp3).
         soundId: _settings.specialTaskSound,
         vibrationPatternId: _settings.specialTaskVibrationPattern,
@@ -1138,7 +1274,7 @@ class NotificationService {
 
       if (success) {
         print(
-          '✅ NotificationService: Special task alarm scheduled via AlarmService!',
+          'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService: Special task alarm scheduled via AlarmService!',
         );
         await _trackSpecialAlarmId(task.id, notificationId);
         await _trackNativeAlarmEntry({
@@ -1147,7 +1283,7 @@ class NotificationService {
           'entityId': task.id,
           'title': renderedTitle,
           'body': renderedBody,
-          'scheduledTimeMs': reminderTime.millisecondsSinceEpoch,
+          'scheduledTimeMs': effectiveReminderTime.millisecondsSinceEpoch,
           'channelKey': 'urgent_reminders',
           'soundKey': _settings.specialTaskSound,
           'vibrationPattern': _settings.specialTaskVibrationPattern,
@@ -1165,7 +1301,7 @@ class NotificationService {
           id: notificationId,
           title: renderedTitle,
           body: renderedBody,
-          scheduledDate: reminderTime,
+          scheduledDate: effectiveReminderTime,
           channelKey: 'urgent_reminders',
           payload: _buildPayload(task.id, reminder, isHabit: false),
           useAlarmMode: true,
@@ -1184,12 +1320,21 @@ class NotificationService {
         //
         // The foreground-service notification created by native is the single UI notification.
         // (We do NOT schedule a second flutter_local_notifications one to avoid duplicates.)
-        if (_settings.isInQuietHoursAt(reminderTime) &&
+        if (_settings.isInQuietHoursAt(effectiveReminderTime) &&
             !_settings.allowUrgentDuringQuietHours) {
-          print(
-            '🌙 NotificationService: In quiet hours — skipping stream-backed reminder',
+          final deferred = _nextAllowedTimeOutsideQuietHours(
+            candidate: effectiveReminderTime,
+            isInQuietHours: _settings.isInQuietHoursAt,
           );
-          return;
+          if (deferred != effectiveReminderTime) {
+            print(
+              'NotificationService: Quiet hours active, deferring stream-backed '
+              'task reminder from $effectiveReminderTime to $deferred',
+            );
+            effectiveReminderTime = deferred;
+          } else {
+            return;
+          }
         }
 
         // Pick tone based on chosen channel (task vs urgent), but play it on the chosen stream.
@@ -1219,7 +1364,7 @@ class NotificationService {
           id: notificationId,
           title: renderedTitle,
           body: renderedBody,
-          scheduledTime: reminderTime,
+          scheduledTime: effectiveReminderTime,
           soundId: soundKey,
           vibrationPatternId: vibrationPatternId,
           showFullscreen: false,
@@ -1241,7 +1386,7 @@ class NotificationService {
             'entityId': task.id,
             'title': renderedTitle,
             'body': renderedBody,
-            'scheduledTimeMs': reminderTime.millisecondsSinceEpoch,
+            'scheduledTimeMs': effectiveReminderTime.millisecondsSinceEpoch,
             'channelKey': channelKey,
             'soundKey': displaySoundKey,
             'vibrationPattern': vibrationPatternId,
@@ -1256,13 +1401,13 @@ class NotificationService {
           });
         } else {
           print(
-            '⚠️ NotificationService: Native stream playback failed; falling back to normal notification.',
+            'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Native stream playback failed; falling back to normal notification.',
           );
           await _scheduleNotification(
             id: notificationId,
             title: renderedTitle,
             body: renderedBody,
-            scheduledDate: reminderTime,
+            scheduledDate: effectiveReminderTime,
             channelKey: channelKey,
             payload: _buildPayload(task.id, reminder, isHabit: false),
             useAlarmMode: useAlarmMode,
@@ -1277,7 +1422,7 @@ class NotificationService {
           id: notificationId,
           title: renderedTitle,
           body: renderedBody,
-          scheduledDate: reminderTime,
+          scheduledDate: effectiveReminderTime,
           channelKey: channelKey,
           payload: _buildPayload(task.id, reminder, isHabit: false),
           useAlarmMode: useAlarmMode,
@@ -1289,14 +1434,18 @@ class NotificationService {
       }
     }
 
-    unawaited(NotificationActivityLogger().logScheduled(
-      moduleId: 'task',
-      entityId: task.id,
-      title: task.title,
-      body: '',
-      payload: _buildPayload(task.id, reminder, isHabit: false),
-    ));
-    print('✅ NotificationService: Notification scheduled successfully!');
+    unawaited(
+      NotificationActivityLogger().logScheduled(
+        moduleId: 'task',
+        entityId: task.id,
+        title: task.title,
+        body: '',
+        payload: _buildPayload(task.id, reminder, isHabit: false),
+      ),
+    );
+    print(
+      'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService: Notification scheduled successfully!',
+    );
   }
 
   Future<String> renderTemplate(
@@ -1364,7 +1513,9 @@ class NotificationService {
 
       return null;
     } catch (e) {
-      print('❌ NotificationService: Error generating task icon: $e');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ NotificationService: Error generating task icon: $e',
+      );
       return null;
     }
   }
@@ -1398,7 +1549,9 @@ class NotificationService {
       if (png == null) return null;
       return ByteArrayAndroidBitmap(png);
     } catch (e) {
-      print('❌ NotificationService: Error generating hub icon: $e');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ NotificationService: Error generating hub icon: $e',
+      );
       return null;
     }
   }
@@ -1434,7 +1587,9 @@ class NotificationService {
 
       return ByteArrayAndroidBitmap(bitmap);
     } catch (e) {
-      print('❌ NotificationService: Error generating category icon: $e');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ NotificationService: Error generating category icon: $e',
+      );
       return null;
     }
   }
@@ -1496,7 +1651,9 @@ class NotificationService {
 
       return null;
     } catch (e) {
-      print('❌ NotificationService: Error generating habit icon: $e');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ NotificationService: Error generating habit icon: $e',
+      );
       return null;
     }
   }
@@ -1573,7 +1730,7 @@ class NotificationService {
         ...task.subtasks!.where((Subtask s) => s.isCompleted),
       ];
       final List<String> lines = items.take(5).map((Subtask s) {
-        final prefix = s.isCompleted ? '✓ ' : '• ';
+        final prefix = s.isCompleted ? '[x] ' : '- ';
         return '$prefix${s.title}'.trim();
       }).toList();
       rendered = rendered.replaceAll('{subtasks}', lines.join('\n'));
@@ -1581,25 +1738,28 @@ class NotificationService {
       rendered = rendered.replaceAll('{subtasks}', '');
     }
 
-    // Clean up separators when category or time is empty
-    // Remove " • " if category is empty
+    // Normalize legacy separator corruption and render in plain ASCII.
+    rendered = rendered
+        .replaceAll('\u00C3\u00A2\u00E2\u201A\u00AC\u00C2\u00A2', ' - ')
+        .replaceAll('\u00E2\u20AC\u00A2', ' - ')
+        .replaceAll('\u2022', ' - ');
+
+    // Clean up separators when category or time is empty.
     if (categoryName.isEmpty) {
-      rendered = rendered.replaceAll(' • {due_time}', '{due_time}');
-      rendered = rendered.replaceAll('{category} • ', '');
-      rendered = rendered.replaceAll(' • ', '');
+      rendered = rendered.replaceAll(' - {due_time}', '{due_time}');
+      rendered = rendered.replaceAll('{category} - ', '');
+      rendered = rendered.replaceAll(' - ', ' ');
     }
 
-    // Remove " • " if time is empty
+    // Remove trailing separator artifacts when time is empty.
     if (dueDateTime == null) {
-      rendered = rendered.replaceAll('{category} • ', '{category}');
-      rendered = rendered.replaceAll(' • ', '');
+      rendered = rendered.replaceAll('{category} - ', '{category}');
+      rendered = rendered.replaceAll(' - ', ' ');
     }
 
-    // Final cleanup of any remaining separators
-    rendered = rendered.replaceAll(' •  • ', ' • ');
-    rendered = rendered.replaceAll(' • •', '');
-    rendered = rendered.replaceAll('• ', '');
-    rendered = rendered.replaceAll(' •', '');
+    // Final cleanup of any remaining separators.
+    rendered = rendered.replaceAll(' -  - ', ' - ');
+    rendered = rendered.replaceAll(' - -', ' - ');
     rendered = rendered.trim();
 
     // Clean up empty lines that can appear when placeholders are missing
@@ -1669,11 +1829,13 @@ class NotificationService {
       rendered = rendered.replaceAll('{goal}', '');
     }
 
+    rendered = rendered
+        .replaceAll('\u00C3\u00A2\u00E2\u201A\u00AC\u00C2\u00A2', ' - ')
+        .replaceAll('\u00E2\u20AC\u00A2', ' - ')
+        .replaceAll('\u2022', ' - ');
     rendered = rendered.replaceAll(RegExp(r'\n\s*\n+'), '\n');
-    rendered = rendered.replaceAll(' •  • ', ' • ');
-    rendered = rendered.replaceAll(' • •', '');
-    rendered = rendered.replaceAll('• ', '');
-    rendered = rendered.replaceAll(' •', '');
+    rendered = rendered.replaceAll(' -  - ', ' - ');
+    rendered = rendered.replaceAll(' - -', ' - ');
 
     return rendered.trim();
   }
@@ -1750,15 +1912,24 @@ class NotificationService {
   Future<void> scheduleMultipleReminders({
     required Task task,
     required List<Reminder> reminders,
+    String sourceFlow = 'task_runtime',
   }) async {
     for (final reminder in reminders) {
-      await scheduleTaskReminder(task: task, reminder: reminder);
+      await scheduleTaskReminder(
+        task: task,
+        reminder: reminder,
+        sourceFlow: sourceFlow,
+      );
     }
   }
 
   /// Cancel a specific reminder for a task
   Future<void> cancelTaskReminder(String taskId, Reminder reminder) async {
-    final notificationId = _generateNotificationId(taskId, reminder);
+    final notificationId = _generateNotificationId(
+      taskId,
+      reminder,
+      moduleId: NotificationHubModuleIds.task,
+    );
     await _notificationsPlugin.cancel(notificationId);
     // Also cancel special-task backup notification (if it exists)
     await _notificationsPlugin.cancel(notificationId + 100000);
@@ -1783,19 +1954,25 @@ class NotificationService {
   }
 
   /// Cancel all reminders for a task
-  Future<void> cancelAllTaskReminders(String taskId) async {
+  Future<void> cancelAllTaskReminders(
+    String taskId, {
+    String sourceFlow = 'task_runtime',
+    String reason = 'cancel',
+  }) async {
     // Robust cancellation:
     // - Cancel all pending plugin notifications whose payload references this taskId
     // - If any are special-task backup notifications (id + 100000), also cancel the native alarm (id - 100000)
     final pending = await _notificationsPlugin.pendingNotificationRequests();
 
     int cancelled = 0;
+    final cancelledIds = <int>{};
     for (final req in pending) {
       final payload = req.payload ?? '';
       // Payload format: task|<taskId>|...
       if (payload.startsWith('task|$taskId|')) {
         await _notificationsPlugin.cancel(req.id);
         cancelled++;
+        cancelledIds.add(req.id);
 
         // If this is a backup notification (scheduled as id + 100000),
         // cancel the corresponding native alarm as well.
@@ -1818,6 +1995,7 @@ class NotificationService {
         if (alarmId != null) {
           await AlarmService().cancelAlarm(alarmId);
           cancelled++;
+          cancelledIds.add(alarmId);
         }
       }
     }
@@ -1830,25 +2008,42 @@ class NotificationService {
     final tracked = await _getTrackedSpecialAlarmIds(taskId);
     for (final alarmId in tracked) {
       await AlarmService().cancelAlarm(alarmId);
+      cancelledIds.add(alarmId);
     }
     await _clearTrackedSpecialAlarmIds(taskId);
 
+    NotificationFlowTrace.log(
+      event: 'legacy_cancel_result',
+      sourceFlow: sourceFlow,
+      moduleId: NotificationHubModuleIds.task,
+      entityId: taskId,
+      reason: reason,
+      notificationIds: (cancelledIds.toList()..sort()),
+      details: <String, dynamic>{'cancelledCount': cancelled},
+    );
+
     print(
-      '🔔 NotificationService: Cancelled $cancelled pending reminders for task $taskId',
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â NotificationService: Cancelled $cancelled pending reminders for task $taskId',
     );
   }
 
   /// Cancel all reminders for a habit
-  Future<void> cancelAllHabitReminders(String habitId) async {
+  Future<void> cancelAllHabitReminders(
+    String habitId, {
+    String sourceFlow = 'habit_runtime',
+    String reason = 'cancel',
+  }) async {
     final pending = await _notificationsPlugin.pendingNotificationRequests();
 
     int cancelled = 0;
+    final cancelledIds = <int>{};
     for (final req in pending) {
       final payload = req.payload ?? '';
       // Payload format: habit|<habitId>|...
       if (payload.startsWith('habit|$habitId|')) {
         await _notificationsPlugin.cancel(req.id);
         cancelled++;
+        cancelledIds.add(req.id);
 
         if (req.id >= 100000) {
           await AlarmService().cancelAlarm(req.id - 100000);
@@ -1868,6 +2063,7 @@ class NotificationService {
         if (alarmId != null) {
           await AlarmService().cancelAlarm(alarmId);
           cancelled++;
+          cancelledIds.add(alarmId);
         }
       }
     }
@@ -1877,11 +2073,22 @@ class NotificationService {
     final tracked = await _getTrackedSpecialAlarmIds(habitId);
     for (final alarmId in tracked) {
       await AlarmService().cancelAlarm(alarmId);
+      cancelledIds.add(alarmId);
     }
     await _clearTrackedSpecialAlarmIds(habitId);
 
+    NotificationFlowTrace.log(
+      event: 'legacy_cancel_result',
+      sourceFlow: sourceFlow,
+      moduleId: NotificationHubModuleIds.habit,
+      entityId: habitId,
+      reason: reason,
+      notificationIds: (cancelledIds.toList()..sort()),
+      details: <String, dynamic>{'cancelledCount': cancelled},
+    );
+
     print(
-      '🔔 NotificationService: Cancelled $cancelled pending reminders for habit $habitId',
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â NotificationService: Cancelled $cancelled pending reminders for habit $habitId',
     );
   }
 
@@ -1895,8 +2102,12 @@ class NotificationService {
     for (final r in reminders) {
       await cancelTaskReminder(task.id, r);
     }
-    await cancelAllTaskReminders(task.id);
-    await scheduleMultipleReminders(task: task, reminders: reminders);
+    await cancelAllTaskReminders(task.id, reason: 'reschedule');
+    await scheduleMultipleReminders(
+      task: task,
+      reminders: reminders,
+      sourceFlow: 'task_reschedule',
+    );
   }
 
   // ============================================================
@@ -1926,7 +2137,7 @@ class NotificationService {
     // Check if notifications are enabled
     if (!_settings.notificationsEnabled) {
       print(
-        '⚠️ NotificationService: Notifications disabled - cannot schedule simple reminder',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Notifications disabled - cannot schedule simple reminder',
       );
       return false;
     }
@@ -1935,13 +2146,13 @@ class NotificationService {
     final now = DateTime.now();
     if (scheduledAt.isBefore(now.subtract(const Duration(seconds: 5)))) {
       print(
-        '⚠️ NotificationService: Simple reminder time is in the past: $scheduledAt',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Simple reminder time is in the past: $scheduledAt',
       );
       return false;
     }
 
     // If scheduled time is "now", bump it slightly so AlarmManager accepts it.
-    final effectiveScheduledAt =
+    var effectiveScheduledAt =
         scheduledAt.isBefore(now.add(const Duration(seconds: 2)))
         ? now.add(const Duration(seconds: 2))
         : scheduledAt;
@@ -1949,12 +2160,21 @@ class NotificationService {
     // Check quiet hours
     if (_settings.isInQuietHoursAt(effectiveScheduledAt) &&
         !_settings.allowUrgentDuringQuietHours) {
-      print(
-        '🌙 NotificationService: In quiet hours — still scheduling simple reminder (will fire when allowed)',
+      final deferred = _nextAllowedTimeOutsideQuietHours(
+        candidate: effectiveScheduledAt,
+        isInQuietHours: _settings.isInQuietHoursAt,
       );
+      if (deferred != effectiveScheduledAt) {
+        print(
+          'NotificationService: Quiet hours active, deferring simple reminder '
+          'from $effectiveScheduledAt to $deferred',
+        );
+        effectiveScheduledAt = deferred;
+      }
     }
-
-    print('📅 NotificationService: Scheduling simple reminder');
+    print(
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService: Scheduling simple reminder',
+    );
     print('   Title: $title');
     print('   Body: ${body ?? "(no body)"}');
     print('   Scheduled: $effectiveScheduledAt');
@@ -1979,10 +2199,19 @@ class NotificationService {
       final isUrgent = channelKey == 'urgent_reminders';
       if (_settings.isInQuietHoursAt(effectiveScheduledAt) &&
           (!isUrgent || !_settings.allowUrgentDuringQuietHours)) {
-        print(
-          '🌙 NotificationService: In quiet hours — skipping stream-backed simple reminder',
+        final deferred = _nextAllowedTimeOutsideQuietHours(
+          candidate: effectiveScheduledAt,
+          isInQuietHours: _settings.isInQuietHoursAt,
         );
-        return false;
+        if (deferred != effectiveScheduledAt) {
+          print(
+            'NotificationService: Quiet hours active, deferring stream-backed '
+            'simple reminder from $effectiveScheduledAt to $deferred',
+          );
+          effectiveScheduledAt = deferred;
+        } else {
+          return false;
+        }
       }
 
       // Pick tone based on chosen channel (task vs urgent), but play it on the chosen stream.
@@ -2040,13 +2269,13 @@ class NotificationService {
         });
 
         print(
-          '✅ NotificationService: Simple reminder scheduled via native stream playback',
+          'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService: Simple reminder scheduled via native stream playback',
         );
         return true;
       }
 
       print(
-        '⚠️ NotificationService: Native stream playback failed; falling back to normal notification.',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Native stream playback failed; falling back to normal notification.',
       );
     }
 
@@ -2070,17 +2299,23 @@ class NotificationService {
         hubColorValue: colorValue,
       );
 
-      print('✅ NotificationService: Simple reminder scheduled successfully');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService: Simple reminder scheduled successfully',
+      );
       return true;
     } catch (e) {
-      print('❌ NotificationService: Failed to schedule simple reminder: $e');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ NotificationService: Failed to schedule simple reminder: $e',
+      );
       return false;
     }
   }
 
   /// Cancel a simple reminder by its notification ID
   Future<void> cancelSimpleReminder(int notificationId) async {
-    print('🔔 NotificationService: Cancelling simple reminder $notificationId');
+    print(
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â NotificationService: Cancelling simple reminder $notificationId',
+    );
     await _notificationsPlugin.cancel(notificationId);
   }
 
@@ -2111,7 +2346,7 @@ class NotificationService {
   }
 
   // ---------------------------------------------------------------------------
-  // Hub Reminder – full-featured scheduling for the Notification Hub
+  // Hub Reminder ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ full-featured scheduling for the Notification Hub
   // ---------------------------------------------------------------------------
 
   /// Schedule a notification through the hub's full pipeline.
@@ -2147,30 +2382,36 @@ class NotificationService {
     await _loadSettings();
     final settings = settingsOverride ?? _settings;
 
-    // ── Guard: notifications disabled ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Guard: notifications disabled ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     if (!settings.notificationsEnabled) {
       print(
-        '⚠️ NotificationService.scheduleHubReminder: notifications disabled',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService.scheduleHubReminder: notifications disabled',
       );
       return false;
     }
 
-    // ── Guard: scheduled time in the past ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Guard: scheduled time in the past ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     final now = DateTime.now();
     if (scheduledAt.isBefore(now.subtract(const Duration(seconds: 5)))) {
       print(
-        '⚠️ NotificationService.scheduleHubReminder: time in the past: $scheduledAt',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService.scheduleHubReminder: time in the past: $scheduledAt',
       );
       return false;
     }
 
     // Bump "now" times slightly so AlarmManager accepts them.
-    final effectiveScheduledAt =
+    var effectiveScheduledAt =
         scheduledAt.isBefore(now.add(const Duration(seconds: 2)))
-            ? now.add(const Duration(seconds: 2))
-            : scheduledAt;
+        ? now.add(const Duration(seconds: 2))
+        : scheduledAt;
 
-    // ── Resolve effective channel ──
+    // Idempotent scheduling: always replace any existing OS entry for this ID.
+    await cancelPendingNotificationById(
+      notificationId: notificationId,
+      logActivity: false,
+    );
+
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Resolve effective channel ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     String effectiveChannelKey = channelKey;
 
     bool isUrgentChannel(String key) =>
@@ -2188,14 +2429,14 @@ class NotificationService {
 
     bool isUrgent = isUrgentChannel(effectiveChannelKey);
 
-    // ── Determine alarm mode ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Determine alarm mode ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     bool shouldUseAlarmMode =
         useAlarmMode ||
         (settings.alarmModeEnabled &&
             (isUrgent ||
                 (priority == 'High' && settings.alarmModeForHighPriority)));
 
-    // ── Determine audio stream ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Determine audio stream ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     // Priority: alarm mode forces alarm stream; otherwise respect the
     // explicitly-passed audioStream (which may come from a Hub per-type
     // override the user configured). Only fall back to 'alarm' for urgent
@@ -2204,72 +2445,69 @@ class NotificationService {
     if (shouldUseAlarmMode) {
       effectiveAudioStream = 'alarm';
     } else if (audioStream != 'notification') {
-      // Caller (Hub) explicitly chose a non-default stream – respect it.
+      // Caller (Hub) explicitly chose a non-default stream ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ respect it.
       effectiveAudioStream = audioStream;
     } else if (isUrgent) {
-      // Urgent channel with default stream → use alarm
+      // Urgent channel with default stream ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ use alarm
       effectiveAudioStream = 'alarm';
     } else {
       effectiveAudioStream = audioStream;
     }
 
-    // ── Full-screen intent resolution ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Full-screen intent resolution ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     bool effectiveUseFullScreenIntent = useFullScreenIntent;
 
-    // ── Sound key resolution ──
-    String effectiveSoundKey = soundKey ??
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Sound key resolution ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+    String effectiveSoundKey =
+        soundKey ??
         (isUrgent
             ? _effectiveSoundKeyForUrgentChannel(settings)
             : _effectiveSoundKeyForTaskChannel(settings));
 
-    // ── Vibration resolution ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Vibration resolution ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     String effectiveVibrationId =
         vibrationPatternId ??
         (settings.vibrationEnabled
             ? (settings.defaultVibrationPattern.isNotEmpty
-                ? settings.defaultVibrationPattern
-                : 'default')
+                  ? settings.defaultVibrationPattern
+                  : 'default')
             : 'none');
 
-    // ── Quiet hours policy (global -> module -> notification privilege) ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Quiet hours policy (global -> module -> notification privilege) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     //
     // settings.allowUrgentDuringQuietHours is the merged effective module/global
     // switch for hub scheduling (module override on top of global default).
-    final isQuiet = settings.isInQuietHoursAt(effectiveScheduledAt);
-    if (isQuiet) {
-      final moduleAllowsQuiet = settings.allowUrgentDuringQuietHours;
-      final shouldBypassQuiet = bypassQuietHours;
-      final allowAudibleDelivery = moduleAllowsQuiet || shouldBypassQuiet;
-
-      if (!allowAudibleDelivery) {
-        // Quiet hours active and not allowed: force SILENT delivery rather than
-        // failing schedule, so reminders still appear without sound/vibration.
-        final bool isHabitChannel = effectiveChannelKey.startsWith('habit_');
-        effectiveChannelKey = isHabitChannel
-            ? 'habit_silent_reminders'
-            : 'silent_reminders';
-        isUrgent = false;
-        shouldUseAlarmMode = false;
-        effectiveAudioStream = 'notification';
-        effectiveSoundKey = 'silent';
-        effectiveVibrationId = 'none';
-        effectiveUseFullScreenIntent = false;
-        effectiveIsSpecial = false;
-
-        print(
-          '🌙 NotificationService.scheduleHubReminder: quiet hours active -> forcing silent channel',
-        );
-      }
+    //
+    // Standard behavior: non-bypassed notifications are deferred outside quiet
+    // hours. We do not silently downgrade to a silent channel.
+    final quietAdjustedAt = _applyHubQuietHoursPolicy(
+      scheduledAt: effectiveScheduledAt,
+      settings: settings,
+      bypassQuietHours: bypassQuietHours,
+    );
+    if (quietAdjustedAt == null) {
+      print(
+        '?? NotificationService.scheduleHubReminder: quiet hours active and no defer slot found',
+      );
+      return false;
+    }
+    if (quietAdjustedAt != effectiveScheduledAt) {
+      print(
+        '?? NotificationService.scheduleHubReminder: quiet hours active -> deferring from $effectiveScheduledAt to $quietAdjustedAt',
+      );
+      effectiveScheduledAt = quietAdjustedAt;
     }
 
-    // ── Check if we need native (AlarmService) playback ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Check if we need native (AlarmService) playback ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     final needsNativePlayback =
         effectiveAudioStream != 'notification' ||
         _isCustomSoundKey(effectiveSoundKey) ||
         effectiveIsSpecial ||
         shouldUseAlarmMode;
 
-    print('📅 NotificationService.scheduleHubReminder:');
+    print(
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService.scheduleHubReminder:',
+    );
     print('   Title: $title');
     print('   Channel: $effectiveChannelKey');
     print('   Sound: $effectiveSoundKey');
@@ -2280,7 +2518,7 @@ class NotificationService {
     print('   Scheduled: $effectiveScheduledAt');
     print('   Notification ID: $notificationId');
 
-    // ── Native alarm path ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Native alarm path ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     if (needsNativePlayback) {
       var nativeSoundKey = effectiveSoundKey;
       if (nativeSoundKey == 'alarm') {
@@ -2296,8 +2534,9 @@ class NotificationService {
           icon: IconData(
             iconCodePoint,
             fontFamily: iconFontFamily ?? 'MaterialIcons',
-            fontPackage:
-                iconFontPackage?.isEmpty == true ? null : iconFontPackage,
+            fontPackage: iconFontPackage?.isEmpty == true
+                ? null
+                : iconFontPackage,
           ),
           color: Color(colorValue ?? 0xFFCDAF56),
           size: 128.0,
@@ -2316,10 +2555,15 @@ class NotificationService {
           ? null
           : jsonEncode(
               buttons
-                  .map((a) => <String, dynamic>{
-                        'actionId': a.actionId,
-                        'label': a.label,
-                      })
+                  .map(
+                    (a) => <String, dynamic>{
+                      'actionId': a.actionId,
+                      'label': _normalizeActionLabel(
+                        actionId: a.actionId,
+                        label: a.label,
+                      ),
+                    },
+                  )
                   .toList(),
             );
 
@@ -2364,17 +2608,17 @@ class NotificationService {
         });
 
         print(
-          '✅ NotificationService.scheduleHubReminder: scheduled via native alarm',
+          'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService.scheduleHubReminder: scheduled via native alarm',
         );
         return true;
       }
 
       print(
-        '⚠️ NotificationService.scheduleHubReminder: native alarm failed, falling back to standard notification',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService.scheduleHubReminder: native alarm failed, falling back to standard notification',
       );
     }
 
-    // ── Standard notification path ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Standard notification path ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     try {
       await _scheduleNotification(
         id: notificationId,
@@ -2402,11 +2646,13 @@ class NotificationService {
       );
 
       print(
-        '✅ NotificationService.scheduleHubReminder: scheduled via standard notification',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService.scheduleHubReminder: scheduled via standard notification',
       );
       return true;
     } catch (e) {
-      print('❌ NotificationService.scheduleHubReminder: $e');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ NotificationService.scheduleHubReminder: $e',
+      );
       return false;
     }
   }
@@ -2424,26 +2670,26 @@ class NotificationService {
         false, // When true, ALWAYS use alarm mode (for Special Tasks)
     String notificationKindLabel = 'Task',
   }) async {
-    print('🔔 showImmediateNotification called:');
+    print('NotificationService: showImmediateNotification called:');
     print('   - Title: $title');
     print('   - Channel: $channelKey');
     print('   - Use Alarm Mode: $useAlarmMode');
     print('   - Force Alarm Bypass: $forceAlarmBypass');
 
     if (!_initialized) {
-      print('🔔 Not initialized, calling initialize()...');
+      print('NotificationService: Not initialized, calling initialize()...');
       await initialize();
     }
 
     // Reload settings to get latest
     await _loadSettings();
     print(
-      '🔔 Settings loaded - notificationsEnabled: ${_settings.notificationsEnabled}',
+      'NotificationService: Settings loaded - notificationsEnabled: ${_settings.notificationsEnabled}',
     );
 
     // Check if notifications are enabled
     if (!_settings.notificationsEnabled) {
-      print('⚠️ NotificationService: Notifications disabled by user');
+      print('NotificationService: Notifications disabled by user');
       return;
     }
 
@@ -2452,14 +2698,16 @@ class NotificationService {
     final shouldUseAlarmMode =
         forceAlarmBypass || (useAlarmMode && _settings.alarmModeEnabled);
     print(
-      '🔔 Should use alarm mode: $shouldUseAlarmMode (force: $forceAlarmBypass, setting: ${_settings.alarmModeEnabled})',
+      'NotificationService: Should use alarm mode: $shouldUseAlarmMode (force: $forceAlarmBypass, setting: ${_settings.alarmModeEnabled})',
     );
 
     // Get vibration pattern
     final vibrationPattern = _getVibrationPattern(
       _settings.defaultVibrationPattern,
     );
-    print('🔔 Vibration pattern: ${vibrationPattern.length} values');
+    print(
+      'NotificationService: Vibration pattern: ${vibrationPattern.length} values',
+    );
 
     // Determine timeout based on settings
     final timeoutAfter = _settings.notificationTimeout > 0
@@ -2483,7 +2731,7 @@ class NotificationService {
         shouldUseAlarmMode; // Always play sound for alarm mode
 
     print(
-      '🔔 Effective channel: $effectiveChannel, Sound: $soundKey, Play: $shouldPlaySound',
+      'NotificationService: Effective channel: $effectiveChannel, Sound: $soundKey, Play: $shouldPlaySound',
     );
 
     // Create notification with user settings
@@ -2538,7 +2786,7 @@ class NotificationService {
       ledOffMs: 500,
 
       // Ticker
-      ticker: shouldUseAlarmMode ? '⚠️ $title' : '⏰ $title',
+      ticker: shouldUseAlarmMode ? 'ALERT $title' : 'Reminder $title',
 
       // Style
       styleInformation: BigTextStyleInformation(
@@ -2565,7 +2813,7 @@ class NotificationService {
           : const Color(0xFFCDAF56),
 
       // Subtext
-      subText: shouldUseAlarmMode ? '⚠️ Special Alert' : 'Life Manager',
+      subText: shouldUseAlarmMode ? 'Special Alert' : 'Life Manager',
     );
 
     final iosDetails = DarwinNotificationDetails(
@@ -2588,7 +2836,7 @@ class NotificationService {
       payload: payload,
     );
 
-    print('🔔 ✅ Notification shown successfully!');
+    print('NotificationService: Notification shown successfully!');
   }
 
   /// Show a test notification for display settings (scheduled 5 seconds in future)
@@ -2600,7 +2848,7 @@ class NotificationService {
     await _loadSettings();
 
     if (!_settings.notificationsEnabled) {
-      print('⚠️ NotificationService: Notifications disabled by user');
+      print('NotificationService: Notifications disabled by user');
       return;
     }
 
@@ -2611,7 +2859,9 @@ class NotificationService {
     final wantSound = _settings.soundEnabled && soundKey != 'silent';
     final enableVibration = _settings.vibrationEnabled;
 
-    print('🔔 Test Display Notification (fires in 5 seconds):');
+    print(
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Test Display Notification (fires in 5 seconds):',
+    );
     print('   Show on Lock Screen: ${_settings.showOnLockScreen}');
     print('   Wake Screen: ${_settings.wakeScreen}');
     print('   LED Enabled: ${_settings.ledEnabled}');
@@ -2700,7 +2950,9 @@ class NotificationService {
           UILocalNotificationDateInterpretation.absoluteTime,
     );
 
-    print('✅ Test notification scheduled for: $scheduledTime');
+    print(
+      'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Test notification scheduled for: $scheduledTime',
+    );
   }
 
   /// Sends a test notification that **always** respects the current Sound/Vibration
@@ -2720,7 +2972,7 @@ class NotificationService {
     await _loadSettings();
 
     if (!_settings.notificationsEnabled) {
-      print('⚠️ NotificationService: Notifications disabled by user');
+      print('NotificationService: Notifications disabled by user');
       return;
     }
 
@@ -2730,8 +2982,9 @@ class NotificationService {
     final soundKey = _settings.defaultSound;
     final wantSound = _settings.soundEnabled && soundKey != 'silent';
     final enableVibration = _settings.vibrationEnabled;
-    final audioStream =
-        useNotificationChannel ? 'notification' : _settings.notificationAudioStream;
+    final audioStream = useNotificationChannel
+        ? 'notification'
+        : _settings.notificationAudioStream;
 
     // Determine if we need to play sound separately (for non-notification streams)
     // Android's notification system always uses notification volume, so we must
@@ -2742,7 +2995,9 @@ class NotificationService {
     // If using external player, the notification itself should be silent
     final notificationPlaySound = wantSound && !useExternalSoundPlayer;
 
-    print('🔔 Test Notification [$timestamp]:');
+    print(
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Test Notification [$timestamp]:',
+    );
     print('   Sound: $wantSound ($soundKey)');
     print('   Stream: $audioStream');
     print('   Vibrate: $enableVibration');
@@ -2783,7 +3038,8 @@ class NotificationService {
     final streamLabel = NotificationSettings.getAudioStreamDisplayName(
       audioStream,
     );
-    final enhancedBody = '$body\n\n🔊 Playing on: $streamLabel';
+    final enhancedBody =
+        '$body\n\nÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒâ€¦Ã‚Â  Playing on: $streamLabel';
 
     final androidDetails = AndroidNotificationDetails(
       testChannelId,
@@ -2823,7 +3079,7 @@ class NotificationService {
       }
 
       print(
-        '🔊 Playing sound on $audioStream stream via SoundPlayerService...',
+        'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒâ€¦Ã‚Â  Playing sound on $audioStream stream via SoundPlayerService...',
       );
       await SoundPlayerService().playSound(
         stream: audioStream,
@@ -2831,7 +3087,9 @@ class NotificationService {
       );
     }
 
-    print('🔔 ✅ Test notification complete!');
+    print(
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Test notification complete!',
+    );
   }
 
   Future<void> showTestHabitNotification({
@@ -2842,7 +3100,9 @@ class NotificationService {
     await _loadHabitSettings();
 
     if (!_habitSettings.notificationsEnabled) {
-      print('⚠️ NotificationService: Habit notifications disabled by user');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Habit notifications disabled by user',
+      );
       return;
     }
 
@@ -2889,7 +3149,8 @@ class NotificationService {
     final streamLabel = HabitNotificationSettings.getAudioStreamDisplayName(
       audioStream,
     );
-    final enhancedBody = '$body\n\n🔊 Playing on: $streamLabel';
+    final enhancedBody =
+        '$body\n\nÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒâ€¦Ã‚Â  Playing on: $streamLabel';
 
     final androidDetails = AndroidNotificationDetails(
       testChannelId,
@@ -2940,7 +3201,9 @@ class NotificationService {
     await _loadHabitSettings();
 
     if (!_habitSettings.notificationsEnabled) {
-      print('⚠️ NotificationService: Habit notifications disabled by user');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Habit notifications disabled by user',
+      );
       return;
     }
 
@@ -2972,13 +3235,13 @@ class NotificationService {
     await _loadSettings();
 
     if (!_settings.notificationsEnabled) {
-      print('⚠️ NotificationService: Notifications disabled by user');
+      print('NotificationService: Notifications disabled by user');
       return false;
     }
 
     final useAlarmMode = _settings.specialTaskAlarmMode;
 
-    print('⭐ Special Task Test:');
+    print('ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚Â­Ãƒâ€šÃ‚Â Special Task Test:');
     print('   Sound: alarm.mp3 (from assets)');
     print('   Alarm Mode UI: $useAlarmMode');
     print('   Will fire in 3 seconds via AlarmService');
@@ -2995,9 +3258,13 @@ class NotificationService {
     );
 
     if (success) {
-      print('⭐ ✅ Special task test alarm scheduled (fires in 3 seconds)');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚Â­Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Special task test alarm scheduled (fires in 3 seconds)',
+      );
     } else {
-      print('⚠️ Failed to schedule test alarm');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Failed to schedule test alarm',
+      );
     }
 
     // Return true if alarm mode is enabled so caller can prepare for AlarmScreen
@@ -3046,9 +3313,11 @@ class NotificationService {
     }
     final settings = settingsOverride ?? _settings;
 
+    var effectiveScheduledDate = scheduledDate;
+
     // Check if notifications are enabled
     if (!settings.notificationsEnabled) {
-      print('⚠️ NotificationService: Notifications disabled by user');
+      print('NotificationService: Notifications disabled by user');
       return;
     }
 
@@ -3112,27 +3381,38 @@ class NotificationService {
     );
 
     // Check quiet hours at the scheduled time
-    final isQuietAtScheduledTime = settings.isInQuietHoursAt(scheduledDate);
+    final isQuietAtScheduledTime = settings.isInQuietHoursAt(
+      effectiveScheduledDate,
+    );
     if (enforceQuietHours && isQuietAtScheduledTime) {
       if (isSpecial) {
         if (!settings.allowUrgentDuringQuietHours) {
           print(
-            '⚠️ NotificationService: In quiet hours, skipping special notification',
+            'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: In quiet hours, skipping special notification',
           );
           return;
         }
       } else {
         if (!isUrgent || !settings.allowUrgentDuringQuietHours) {
-          print(
-            '⚠️ NotificationService: In quiet hours, skipping notification',
+          final deferred = _nextAllowedTimeOutsideQuietHours(
+            candidate: effectiveScheduledDate,
+            isInQuietHours: settings.isInQuietHoursAt,
           );
-          return;
+          if (deferred != effectiveScheduledDate) {
+            print(
+              'NotificationService: Quiet hours active, deferring notification '
+              'from $effectiveScheduledDate to $deferred',
+            );
+            effectiveScheduledDate = deferred;
+          } else {
+            return;
+          }
         }
       }
     }
 
     final tz.TZDateTime tzScheduledDate = tz.TZDateTime.from(
-      scheduledDate,
+      effectiveScheduledDate,
       tz.local,
     );
 
@@ -3194,7 +3474,7 @@ class NotificationService {
         ...task.subtasks!.where((Subtask s) => s.isCompleted),
       ];
       final List<String> lines = items.take(5).map((Subtask s) {
-        final prefix = s.isCompleted ? '✓ ' : '• ';
+        final prefix = s.isCompleted ? '[x] ' : '- ';
         return '$prefix${s.title}'.trim();
       }).toList();
 
@@ -3271,8 +3551,8 @@ class NotificationService {
 
       // Ticker text (shown in status bar briefly)
       ticker: isSpecial
-          ? '⭐ Special $notificationKindLabel: $title'
-          : '⏰ $notificationKindLabel Reminder: $title',
+          ? 'Special $notificationKindLabel: $title'
+          : '$notificationKindLabel Reminder: $title',
 
       // Style - Inbox for subtasks, BigText otherwise
       styleInformation: styleInformation,
@@ -3298,13 +3578,13 @@ class NotificationService {
       // Special/alarm-like: keep timestamp
       showWhen: isSpecial || shouldUseAlarmMode,
       when: (isSpecial || shouldUseAlarmMode)
-          ? scheduledDate.millisecondsSinceEpoch
+          ? effectiveScheduledDate.millisecondsSinceEpoch
           : null,
 
       // Color accent
       color: const Color(0xFFCDAF56),
 
-      // Audio stream – ensures the notification plays on the correct volume
+      // Audio stream ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ ensures the notification plays on the correct volume
       // channel (notification / alarm / ring / media).
       audioAttributesUsage: _getAudioAttributesUsage(effectiveAudioStream),
 
@@ -3345,7 +3625,7 @@ class NotificationService {
     );
 
     print(
-      '📲 NotificationService._scheduleNotification: Successfully scheduled!',
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â² NotificationService._scheduleNotification: Successfully scheduled!',
     );
     print('   ID: $id, Time: $tzScheduledDate, AlarmMode: $shouldUseAlarmMode');
 
@@ -3357,7 +3637,7 @@ class NotificationService {
       'entityId': payloadParts.length >= 2 ? payloadParts[1] : '',
       'title': title,
       'body': body,
-      'scheduledTimeMs': scheduledDate.millisecondsSinceEpoch,
+      'scheduledTimeMs': effectiveScheduledDate.millisecondsSinceEpoch,
       'channelKey': effectiveChannelKey,
       'soundKey': effectiveSoundKey ?? 'default',
       'vibrationPattern': isUrgent ? 'long' : settings.defaultVibrationPattern,
@@ -3379,7 +3659,9 @@ class NotificationService {
     if (!_initialized) await initialize();
 
     final pattern = _getVibrationPattern(patternKey);
-    print('🔔 Previewing vibration pattern: $patternKey');
+    print(
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Previewing vibration pattern: $patternKey',
+    );
 
     // On Android 8+, vibration is tied to the channel.
     // To ensure the preview works, we use a temporary channel and delete it after.
@@ -3408,7 +3690,7 @@ class NotificationService {
 
     await _notificationsPlugin.show(
       88888,
-      '📳 Vibration Preview',
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â³ Vibration Preview',
       'Pattern: ${patternKey.toUpperCase()}',
       NotificationDetails(android: androidDetails),
     );
@@ -3418,7 +3700,9 @@ class NotificationService {
   Future<void> previewSound(String soundKey) async {
     if (!_initialized) await initialize();
 
-    print('🔔 Previewing sound: $soundKey');
+    print(
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Previewing sound: $soundKey',
+    );
     final sound = _androidSoundForKey(soundKey);
 
     // Similar to vibration, we use a temporary channel for sound preview
@@ -3446,7 +3730,7 @@ class NotificationService {
 
     await _notificationsPlugin.show(
       99999,
-      '🎵 Sound Preview',
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½Ãƒâ€šÃ‚Âµ Sound Preview',
       'Tone: ${soundKey.toUpperCase()}',
       NotificationDetails(android: androidDetails),
     );
@@ -3486,26 +3770,38 @@ class NotificationService {
     DateTime? scheduledDate,
     String? channelKeyOverride,
     String? audioStreamOverride,
+    String sourceFlow = 'habit_runtime',
   }) async {
     if (!_initialized) await initialize();
     if (!reminder.enabled) return;
+
+    final policy = await NotificationModulePolicy.read(
+      NotificationHubModuleIds.habit,
+    );
+    if (!policy.enabled) {
+      NotificationFlowTrace.log(
+        event: 'legacy_schedule_skipped',
+        sourceFlow: sourceFlow,
+        moduleId: NotificationHubModuleIds.habit,
+        entityId: habit.id,
+        reason: policy.reason,
+      );
+      return;
+    }
 
     // Reload habit settings
     await _loadHabitSettings();
     final habitSettings = _habitSettings;
     final habitSettingsAsTask = _notificationSettingsForHabits();
 
-    if (!habitSettings.notificationsEnabled) {
-      print('⚠️ NotificationService: Notifications disabled by user');
-      return;
-    }
-
     // If scheduledDate is not provided, use today's occurrence
     final baseDate = scheduledDate ?? DateTime.now();
     final DateTime? habitDueDateTime = _getHabitDueDateTime(habit, baseDate);
 
     if (habitDueDateTime == null) {
-      print('⚠️ NotificationService: Habit has no due time');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Habit has no due time',
+      );
       return;
     }
 
@@ -3513,17 +3809,26 @@ class NotificationService {
       habitDueDateTime,
     );
     if (reminderTime == null) {
-      print('⚠️ NotificationService: Could not calculate habit reminder time');
+      print(
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Could not calculate habit reminder time',
+      );
       return;
     }
 
-    if (reminderTime.isBefore(DateTime.now())) {
-      // If today's reminder already passed, don't schedule it
-      // In a real app, we'd schedule the next occurrence
-      print(
-        '⚠️ NotificationService: Habit reminder time is in the past: $reminderTime',
-      );
-      return;
+    var effectiveReminderTime = reminderTime;
+    final now = DateTime.now();
+    if (reminderTime.isBefore(now)) {
+      // Editing around the exact trigger minute can put reminderTime a few
+      // seconds behind now. Grace that case instead of dropping the reminder.
+      final lag = now.difference(reminderTime);
+      if (lag <= const Duration(minutes: 1)) {
+        effectiveReminderTime = now.add(const Duration(seconds: 5));
+      } else {
+        print(
+          'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â NotificationService: Habit reminder time is in the past: $reminderTime',
+        );
+        return;
+      }
     }
 
     final isSpecialHabit = habit.isSpecial;
@@ -3538,14 +3843,29 @@ class NotificationService {
             : habitSettings.defaultChannel);
     final effectiveAudioStream =
         audioStreamOverride ?? habitSettings.notificationAudioStream;
-    final isQuietAtReminderTime = habitSettings.isInQuietHoursAt(reminderTime);
+    final isQuietAtReminderTime = habitSettings.isInQuietHoursAt(
+      effectiveReminderTime,
+    );
     if (isQuietAtReminderTime &&
         useSpecialAlertRouting &&
         !habitSettings.allowSpecialDuringQuietHours) {
       print(
-        '🌙 NotificationService: Quiet hours active — blocking special habit alert',
+        'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã¢â‚¬â„¢ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ NotificationService: Quiet hours active ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â blocking special habit alert',
       );
       return;
+    }
+    if (isQuietAtReminderTime && !useSpecialAlertRouting) {
+      final deferred = _nextAllowedTimeOutsideQuietHours(
+        candidate: effectiveReminderTime,
+        isInQuietHours: habitSettings.isInQuietHoursAt,
+      );
+      if (deferred != effectiveReminderTime) {
+        print(
+          'NotificationService: Quiet hours active, deferring habit reminder '
+          'from $effectiveReminderTime to $deferred',
+        );
+        effectiveReminderTime = deferred;
+      }
     }
 
     final occurrenceKey = scheduledDate ?? habitDueDateTime;
@@ -3553,6 +3873,24 @@ class NotificationService {
       habit.id,
       reminder,
       scheduledDate: occurrenceKey,
+      moduleId: NotificationHubModuleIds.habit,
+    );
+    NotificationFlowTrace.log(
+      event: 'legacy_schedule_request',
+      sourceFlow: sourceFlow,
+      moduleId: NotificationHubModuleIds.habit,
+      entityId: habit.id,
+      notificationId: notificationId,
+      details: <String, dynamic>{
+        'reminderType': reminder.type,
+        'reminderValue': reminder.value,
+        'reminderUnit': reminder.unit,
+      },
+    );
+    await cancelPendingNotificationById(
+      notificationId: notificationId,
+      entityId: habit.id,
+      logActivity: false,
     );
     final payload = _buildPayload(habit.id, reminder, isHabit: true);
     final titleTemplate = useSpecialAlertRouting
@@ -3574,7 +3912,9 @@ class NotificationService {
       reminder,
     );
     final title = renderedTitle.isEmpty
-        ? (useSpecialAlertRouting ? '⭐ ${habit.title}' : habit.title)
+        ? (useSpecialAlertRouting
+              ? 'Special Habit: ${habit.title}'
+              : habit.title)
         : renderedTitle;
     final body = renderedBody.isEmpty
         ? (reminder.type == 'at_time'
@@ -3583,11 +3923,11 @@ class NotificationService {
         : renderedBody;
 
     print(
-      '📅 NotificationService: Scheduling habit notification for "${habit.title}"',
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NotificationService: Scheduling habit notification for "${habit.title}"',
     );
     print('   Habit time: $habitDueDateTime');
     print('   Reminder: ${reminder.getDescription()}');
-    print('   Notification will fire at: $reminderTime');
+    print('   Notification will fire at: $effectiveReminderTime');
     print('   Is Special: $isSpecialHabit');
     print('   Special Alert Routing: $useSpecialAlertRouting');
     print('   Channel: $effectiveChannelKey');
@@ -3602,7 +3942,7 @@ class NotificationService {
         id: notificationId,
         title: title,
         body: body,
-        scheduledTime: reminderTime,
+        scheduledTime: effectiveReminderTime,
         soundId: habitSettings.specialHabitSound,
         vibrationPatternId: habitSettings.specialHabitVibrationPattern,
         showFullscreen: habitSettings.specialHabitAlarmMode,
@@ -3621,7 +3961,7 @@ class NotificationService {
           'entityId': habit.id,
           'title': title,
           'body': body,
-          'scheduledTimeMs': reminderTime.millisecondsSinceEpoch,
+          'scheduledTimeMs': effectiveReminderTime.millisecondsSinceEpoch,
           'channelKey': 'habit_urgent_reminders',
           'soundKey': habitSettings.specialHabitSound,
           'vibrationPattern': habitSettings.specialHabitVibrationPattern,
@@ -3634,13 +3974,15 @@ class NotificationService {
           'oneShot': false,
           'createdAtMs': DateTime.now().millisecondsSinceEpoch,
         });
-        unawaited(NotificationActivityLogger().logScheduled(
-          moduleId: 'habit',
-          entityId: habit.id,
-          title: title,
-          body: body,
-          payload: payload,
-        ));
+        unawaited(
+          NotificationActivityLogger().logScheduled(
+            moduleId: 'habit',
+            entityId: habit.id,
+            title: title,
+            body: body,
+            payload: payload,
+          ),
+        );
         return;
       }
     }
@@ -3656,12 +3998,21 @@ class NotificationService {
                 _isCustomSoundKey(habitChannelSoundKey))) &&
         effectiveChannelKey != 'habit_silent_reminders';
     if (useNativePlaybackForStream) {
-      if (habitSettings.isInQuietHoursAt(reminderTime) &&
+      if (habitSettings.isInQuietHoursAt(effectiveReminderTime) &&
           !habitSettings.allowSpecialDuringQuietHours) {
-        print(
-          '🌙 NotificationService: In quiet hours — skipping stream-backed habit reminder',
+        final deferred = _nextAllowedTimeOutsideQuietHours(
+          candidate: effectiveReminderTime,
+          isInQuietHours: habitSettings.isInQuietHoursAt,
         );
-        return;
+        if (deferred != effectiveReminderTime) {
+          print(
+            'NotificationService: Quiet hours active, deferring stream-backed '
+            'habit reminder from $effectiveReminderTime to $deferred',
+          );
+          effectiveReminderTime = deferred;
+        } else {
+          return;
+        }
       }
 
       var soundKey = habitChannelSoundKey;
@@ -3685,7 +4036,7 @@ class NotificationService {
         id: notificationId,
         title: title,
         body: body,
-        scheduledTime: reminderTime,
+        scheduledTime: effectiveReminderTime,
         soundId: soundKey,
         vibrationPatternId: vibrationPatternId,
         showFullscreen: false,
@@ -3705,7 +4056,7 @@ class NotificationService {
           'entityId': habit.id,
           'title': title,
           'body': body,
-          'scheduledTimeMs': reminderTime.millisecondsSinceEpoch,
+          'scheduledTimeMs': effectiveReminderTime.millisecondsSinceEpoch,
           'channelKey': effectiveChannelKey,
           'soundKey': displaySoundKey,
           'vibrationPattern': vibrationPatternId,
@@ -3718,13 +4069,15 @@ class NotificationService {
           'oneShot': true,
           'createdAtMs': DateTime.now().millisecondsSinceEpoch,
         });
-        unawaited(NotificationActivityLogger().logScheduled(
-          moduleId: 'habit',
-          entityId: habit.id,
-          title: title,
-          body: body,
-          payload: payload,
-        ));
+        unawaited(
+          NotificationActivityLogger().logScheduled(
+            moduleId: 'habit',
+            entityId: habit.id,
+            title: title,
+            body: body,
+            payload: payload,
+          ),
+        );
         return;
       }
     }
@@ -3733,7 +4086,7 @@ class NotificationService {
       id: notificationId,
       title: title,
       body: body,
-      scheduledDate: reminderTime,
+      scheduledDate: effectiveReminderTime,
       channelKey: effectiveChannelKey,
       payload: payload,
       useAlarmMode:
@@ -3747,22 +4100,29 @@ class NotificationService {
       audioStreamOverride: effectiveAudioStream,
       settingsOverride: habitSettingsAsTask,
     );
-    unawaited(NotificationActivityLogger().logScheduled(
-      moduleId: 'habit',
-      entityId: habit.id,
-      title: title,
-      body: body,
-      payload: payload,
-    ));
+    unawaited(
+      NotificationActivityLogger().logScheduled(
+        moduleId: 'habit',
+        entityId: habit.id,
+        title: title,
+        body: body,
+        payload: payload,
+      ),
+    );
   }
 
   /// Schedule multiple reminders for a habit
   Future<void> scheduleMultipleHabitReminders({
     required Habit habit,
     required List<Reminder> reminders,
+    String sourceFlow = 'habit_runtime',
   }) async {
     for (final reminder in reminders) {
-      await scheduleHabitReminder(habit: habit, reminder: reminder);
+      await scheduleHabitReminder(
+        habit: habit,
+        reminder: reminder,
+        sourceFlow: sourceFlow,
+      );
     }
   }
 
@@ -3818,6 +4178,7 @@ class NotificationService {
     String id,
     Reminder reminder, {
     DateTime? scheduledDate,
+    String moduleId = NotificationHubModuleIds.task,
   }) {
     // IMPORTANT: must be unique across multiple reminders for the same task.
     // For custom reminders, include the absolute timestamp.
@@ -3832,7 +4193,29 @@ class NotificationService {
               '${scheduledDate.month.toString().padLeft(2, '0')}'
               '${scheduledDate.day.toString().padLeft(2, '0')}';
     final combined = dateKey == null ? base : '$base-$dateKey';
-    return combined.hashCode.abs() % 2147483647; // Max int32
+    final hash = combined.hashCode.abs();
+
+    // Keep task/habit IDs inside their reserved Hub ranges so retries,
+    // diagnostics, and source resolution remain deterministic.
+    final int rangeStart;
+    final int rangeSize;
+    if (moduleId == NotificationHubModuleIds.habit) {
+      rangeStart = NotificationHubIdRanges.habitStart;
+      rangeSize =
+          NotificationHubIdRanges.habitEnd -
+          NotificationHubIdRanges.habitStart +
+          1;
+    } else if (moduleId == NotificationHubModuleIds.task) {
+      rangeStart = NotificationHubIdRanges.taskStart;
+      rangeSize =
+          NotificationHubIdRanges.taskEnd -
+          NotificationHubIdRanges.taskStart +
+          1;
+    } else {
+      return hash % 2147483647;
+    }
+
+    return rangeStart + (hash % rangeSize);
   }
 
   /// Build notification body
@@ -3848,13 +4231,13 @@ class NotificationService {
       final progressText = '$completedCount/$totalCount subtasks done';
 
       if (task.description != null && task.description!.isNotEmpty) {
-        return '$description • ${task.description} ($progressText)';
+        return '$description - ${task.description} ($progressText)';
       }
       return '$description ($progressText)';
     }
 
     if (task.description != null && task.description!.isNotEmpty) {
-      return '$description • ${task.description}';
+      return '$description - ${task.description}';
     }
     return description;
   }
@@ -3905,7 +4288,7 @@ class NotificationService {
           .map(
             (a) => AndroidNotificationAction(
               a.actionId,
-              a.label,
+              _normalizeActionLabel(actionId: a.actionId, label: a.label),
               showsUserInterface: a.showsUserInterface,
               cancelNotification: a.cancelNotification,
             ),
@@ -3919,7 +4302,7 @@ class NotificationService {
           .map(
             (a) => AndroidNotificationAction(
               a.actionId,
-              a.label,
+              _normalizeActionLabel(actionId: a.actionId, label: a.label),
               showsUserInterface: a.showsUserInterface,
               cancelNotification: a.cancelNotification,
             ),
@@ -3932,19 +4315,47 @@ class NotificationService {
     );
   }
 
+  String _normalizeActionLabel({
+    required String actionId,
+    required String label,
+  }) {
+    final cleaned = label
+        .replaceAll('\u00E2\u20AC\u00A2', ' - ')
+        .replaceAll('\u2022', ' - ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .replaceFirst(RegExp(r'^[^A-Za-z0-9]+'), '')
+        .trim();
+
+    switch (actionId) {
+      case 'mark_done':
+      case 'done':
+        return 'Done';
+      case 'skip':
+        return 'Skip';
+      case 'view':
+      case 'open':
+        return 'View';
+      case 'snooze_5':
+        return 'Snooze 5m';
+      default:
+        return cleaned.isEmpty ? 'Action' : cleaned;
+    }
+  }
+
   /// Get notification actions with snooze duration from settings
   List<AndroidNotificationAction> _getNotificationActions({
     NotificationSettings? settingsOverride,
     bool isHabit = false,
   }) {
     final settings = settingsOverride ?? _settings;
-    // ── Habit actions: exactly 3 buttons to match native Kotlin builder ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Habit actions: exactly 3 buttons to match native Kotlin builder ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     // [Done, Snooze 5m, Skip]. A 4th button causes Android to hide "Skip".
     if (isHabit) {
       return const <AndroidNotificationAction>[
         AndroidNotificationAction(
           'mark_done',
-          '\u2713 Done',
+          'Done',
           showsUserInterface: false,
           cancelNotification: true,
         ),
@@ -3956,20 +4367,20 @@ class NotificationService {
         ),
         AndroidNotificationAction(
           'skip',
-          '\u23ED Skip',
+          'Skip',
           showsUserInterface: false,
           cancelNotification: true,
         ),
       ];
     }
-    // ── Task actions: existing logic with optional Snooze-5m shortcut ──
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Task actions: existing logic with optional Snooze-5m shortcut ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     final snoozeDuration = settings.defaultSnoozeDuration;
     final snoozeLabel = snoozeDuration < 60
         ? 'Snooze ${snoozeDuration}m'
         : 'Snooze ${snoozeDuration ~/ 60}h';
 
     // Professional UX: provide a quick 5-minute snooze option if configured,
-    // so users don’t rely on Android’s system-level snooze (which we can’t track).
+    // so users donÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢t rely on AndroidÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢s system-level snooze (which we canÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢t track).
     final snoozeOptions = (settings.snoozeOptions.toSet().toList()..sort());
     final hasFive = snoozeOptions.contains(5);
     final addFiveShortcut = hasFive && snoozeDuration != 5;
@@ -3977,7 +4388,7 @@ class NotificationService {
     return <AndroidNotificationAction>[
       const AndroidNotificationAction(
         'mark_done',
-        '✓ Done',
+        'Done',
         // Don't show UI - handle completion in background
         showsUserInterface: false,
         cancelNotification: true,
@@ -4195,7 +4606,7 @@ class NotificationService {
     final effectiveSound = soundOverride ?? info.soundKey;
 
     print(
-      '🔔 Firing REAL notification in $delaySeconds seconds: ${info.title}',
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Firing REAL notification in $delaySeconds seconds: ${info.title}',
     );
     print('   ID: ${info.id}');
     print('   Delay: $delaySeconds seconds');
@@ -4212,7 +4623,9 @@ class NotificationService {
         final taskRepo = TaskRepository();
         task = await taskRepo.getTaskById(info.entityId);
       } catch (e) {
-        print('⚠️ Could not load task: $e');
+        print(
+          'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Could not load task: $e',
+        );
       }
     }
     if (info.type == 'habit' && info.entityId.isNotEmpty) {
@@ -4220,7 +4633,9 @@ class NotificationService {
         final habitRepo = HabitRepository();
         habit = await habitRepo.getHabitById(info.entityId);
       } catch (e) {
-        print('⚠️ Could not load habit: $e');
+        print(
+          'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Could not load habit: $e',
+        );
       }
     }
 
@@ -4271,10 +4686,12 @@ class NotificationService {
 
       if (success) {
         print(
-          '✅ Real notification scheduled via AlarmService (fires in $effectiveDelay seconds)',
+          'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Real notification scheduled via AlarmService (fires in $effectiveDelay seconds)',
         );
       } else {
-        print('⚠️ AlarmService failed, using standard notification');
+        print(
+          'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â AlarmService failed, using standard notification',
+        );
         await _fireStandardNotificationNow(
           info: info,
           task: task,
@@ -4337,7 +4754,9 @@ class NotificationService {
       settingsOverride: settingsOverride,
     );
 
-    print('✅ Real notification scheduled (fires in $delaySeconds seconds)');
+    print(
+      'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Real notification scheduled (fires in $delaySeconds seconds)',
+    );
   }
 
   /// Get list of available channels for testing (from actual settings)
@@ -4405,10 +4824,166 @@ class NotificationService {
     return sounds;
   }
 
+  /// Finds the next time outside quiet hours using a bounded step scan.
+  DateTime _nextAllowedTimeOutsideQuietHours({
+    required DateTime candidate,
+    required bool Function(DateTime time) isInQuietHours,
+    Duration step = const Duration(minutes: 15),
+    int maxSteps = 7 * 24 * 4, // up to 7 days at 15-minute increments
+  }) {
+    var next = candidate;
+    for (var i = 0; i < maxSteps; i++) {
+      if (!isInQuietHours(next)) {
+        return next;
+      }
+      next = next.add(step);
+    }
+    return candidate;
+  }
+
+  DateTime? _applyHubQuietHoursPolicy({
+    required DateTime scheduledAt,
+    required NotificationSettings settings,
+    required bool bypassQuietHours,
+  }) {
+    if (!settings.isInQuietHoursAt(scheduledAt)) {
+      return scheduledAt;
+    }
+
+    final allowDeliveryNow =
+        settings.allowUrgentDuringQuietHours || bypassQuietHours;
+    if (allowDeliveryNow) {
+      return scheduledAt;
+    }
+
+    final deferred = _nextAllowedTimeOutsideQuietHours(
+      candidate: scheduledAt,
+      isInQuietHours: settings.isInQuietHoursAt,
+    );
+    if (deferred == scheduledAt) {
+      return null;
+    }
+    return deferred;
+  }
+
+  @visibleForTesting
+  DateTime? resolveHubQuietHoursScheduledAtForTest({
+    required DateTime scheduledAt,
+    required NotificationSettings settings,
+    required bool bypassQuietHours,
+  }) {
+    return _applyHubQuietHoursPolicy(
+      scheduledAt: scheduledAt,
+      settings: settings,
+      bypassQuietHours: bypassQuietHours,
+    );
+  }
+
   /// Cancel all notifications
   Future<void> cancelAllNotifications() async {
     if (!_initialized) await initialize();
     await _notificationsPlugin.cancelAll();
+  }
+
+  /// Performs a deep cancellation of all currently pending notifications.
+  ///
+  /// Unlike [cancelAllNotifications], this routes through
+  /// [cancelPendingNotificationById] so native alarm IDs, backup-ID pairs, and
+  /// tracked metadata are cleaned consistently.
+  ///
+  /// Returns the number of unique pending notification IDs observed before
+  /// cleanup.
+  Future<int> cancelAllPendingNotificationsDeep({
+    bool logActivity = false,
+  }) async {
+    if (!_initialized) await initialize();
+
+    final pending = await getDetailedPendingNotifications();
+    final pendingById = <int, PendingNotificationInfo>{};
+    for (final info in pending) {
+      pendingById[info.id] = info;
+    }
+
+    for (final info in pendingById.values) {
+      await cancelPendingNotificationById(
+        notificationId: info.id,
+        entityId: info.entityId,
+        logActivity: logActivity,
+      );
+    }
+
+    // Safety sweep in case any plugin-only entry was not represented above.
+    await _notificationsPlugin.cancelAll();
+    await clearAllTrackedNotificationState();
+
+    return pendingById.length;
+  }
+
+  /// Clears all persisted notification tracking state used for diagnostics and
+  /// alarm bookkeeping.
+  ///
+  /// This does not schedule/cancel anything by itself; pair it with
+  /// [cancelAllNotifications] or targeted cancellation when doing a full reset.
+  Future<void> clearAllTrackedNotificationState() async {
+    if (!_initialized) await initialize();
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getKeys();
+    final removable = keys.where((key) {
+      return key == _prefsTrackedNativeAlarmsKey ||
+          key == _prefsTrackedFlutterNotificationsKey ||
+          key.startsWith(_prefsSpecialAlarmIdsPrefix);
+    });
+    for (final key in removable) {
+      await prefs.remove(key);
+    }
+  }
+
+  /// Cancel notifications whose IDs are outside known module ranges.
+  ///
+  /// This is a safety cleanup for stale notifications created by legacy builds
+  /// before deterministic module ranges were enforced.
+  Future<int> cancelOutOfRangePendingNotifications({
+    String sourceFlow = 'out_of_range_cleanup',
+  }) async {
+    if (!_initialized) await initialize();
+
+    final pending = await getDetailedPendingNotifications();
+    var cancelled = 0;
+    for (final info in pending) {
+      final moduleId = NotificationLogicalKeyHelper.moduleIdFor(info);
+      final entityId = NotificationLogicalKeyHelper.entityIdFor(info);
+      final inKnownRange = NotificationLogicalKeyHelper.isInKnownRange(info.id);
+      final inModuleRange = NotificationLogicalKeyHelper.isInModuleRange(
+        moduleId,
+        info.id,
+      );
+      if (inKnownRange && inModuleRange) {
+        continue;
+      }
+
+      await cancelPendingNotificationById(
+        notificationId: info.id,
+        entityId: entityId,
+        logActivity: false,
+      );
+      cancelled++;
+
+      NotificationFlowTrace.log(
+        event: 'out_of_range_cancelled',
+        sourceFlow: sourceFlow,
+        moduleId: moduleId,
+        entityId: entityId,
+        notificationId: info.id,
+        reason: inKnownRange ? 'module_range_mismatch' : 'out_of_known_range',
+      );
+    }
+
+    if (cancelled > 0 && kDebugMode) {
+      debugPrint(
+        'NotificationService: cancelled $cancelled out-of-range pending notification(s)',
+      );
+    }
+    return cancelled;
   }
 
   /// Cancel a single pending notification by ID.
@@ -4419,6 +4994,7 @@ class NotificationService {
   Future<void> cancelPendingNotificationById({
     required int notificationId,
     String? entityId,
+    bool logActivity = true,
   }) async {
     if (!_initialized) await initialize();
 
@@ -4455,19 +5031,21 @@ class NotificationService {
     }
 
     // Inform the Hub about the single-notification cancellation.
-    if (entityId != null && entityId.isNotEmpty) {
-      unawaited(NotificationActivityLogger().logCancelled(
-        moduleId: 'unknown', // caller may not know; entityId is best-effort
-        entityId: entityId,
-        metadata: <String, dynamic>{
-          'notificationId': notificationId,
-          'source': 'cancel_by_id',
-        },
-      ));
+    if (logActivity && entityId != null && entityId.isNotEmpty) {
+      unawaited(
+        NotificationActivityLogger().logCancelled(
+          moduleId: 'unknown', // caller may not know; entityId is best-effort
+          entityId: entityId,
+          metadata: <String, dynamic>{
+            'notificationId': notificationId,
+            'source': 'cancel_by_id',
+          },
+        ),
+      );
     }
 
     print(
-      '🔔 NotificationService: Cancelled pending notification IDs ${(idsToCancel.toList()..sort())}',
+      'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â€šÂ¬Ã‚Â NotificationService: Cancelled pending notification IDs ${(idsToCancel.toList()..sort())}',
     );
   }
 
@@ -4502,7 +5080,7 @@ class NotificationService {
         notificationKindLabel.toLowerCase() == 'habit' ||
         (payload?.startsWith('habit|') ?? false);
 
-    // ── Load authoritative settings ──────────────────────────────────
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Load authoritative settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     // For habits we MUST reload _habitSettings so that
     // _resolveAndroidChannelId('habit_reminders') produces the correct
     // versioned channel id (sound/vibration are baked into the channel).
@@ -4513,7 +5091,7 @@ class NotificationService {
         ? _notificationSettingsForHabits()
         : (settingsOverride ?? _settings);
 
-    // ── Look up the original tracked notification entry ──────────────
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Look up the original tracked notification entry ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     Map<String, dynamic>? trackedEntry;
     bool trackedIsNativeAlarm = false;
     if (originalNotificationId != null) {
@@ -4537,7 +5115,7 @@ class NotificationService {
     final trackedTitle = (trackedEntry?['title'] as String?)?.trim();
     final trackedBody = (trackedEntry?['body'] as String?)?.trim();
 
-    // ── Parse / validate snooze count ────────────────────────────────
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Parse / validate snooze count ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     int currentSnoozeCount = 0;
     if (payload != null && payload.contains('snoozeCount:')) {
       final match = RegExp(r'snoozeCount:(\d+)').firstMatch(payload);
@@ -4547,14 +5125,14 @@ class NotificationService {
     }
 
     print(
-      '⏰ Current snooze count: $currentSnoozeCount, Max allowed: ${settings.maxSnoozeCount}',
+      'ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â° Current snooze count: $currentSnoozeCount, Max allowed: ${settings.maxSnoozeCount}',
     );
 
     // Check if max snooze count reached (999 = unlimited)
     if (settings.maxSnoozeCount != 999 &&
         currentSnoozeCount >= settings.maxSnoozeCount) {
       print(
-        '⚠️ Max snooze count reached ($currentSnoozeCount/${settings.maxSnoozeCount}). Cannot snooze again.',
+        'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Max snooze count reached ($currentSnoozeCount/${settings.maxSnoozeCount}). Cannot snooze again.',
       );
       return;
     }
@@ -4572,7 +5150,7 @@ class NotificationService {
       updatedPayload = '$updatedPayload|snoozeCount:$currentSnoozeCount';
     }
 
-    // ── Determine snooze duration ────────────────────────────────────
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Determine snooze duration ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     int snoozeDuration =
         customDurationMinutes ?? settings.defaultSnoozeDuration;
 
@@ -4582,13 +5160,19 @@ class NotificationService {
         priority != null) {
       if (priority == 'High') {
         snoozeDuration = 5;
-        print('🧠 Smart Snooze: High priority → 5 min');
+        print(
+          'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚Â§Ãƒâ€šÃ‚Â  Smart Snooze: High priority ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ 5 min',
+        );
       } else if (priority == 'Medium') {
         snoozeDuration = 10;
-        print('🧠 Smart Snooze: Medium priority → 10 min');
+        print(
+          'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚Â§Ãƒâ€šÃ‚Â  Smart Snooze: Medium priority ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ 10 min',
+        );
       } else {
         snoozeDuration = 15;
-        print('🧠 Smart Snooze: Low priority → 15 min');
+        print(
+          'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚Â§Ãƒâ€šÃ‚Â  Smart Snooze: Low priority ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ 15 min',
+        );
       }
     }
 
@@ -4603,31 +5187,37 @@ class NotificationService {
             .abs() %
         2147483647);
 
-    // ── Resolve title / body from tracked entry (template parity) ────
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Resolve title / body from tracked entry (template parity) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     final effectiveTitle = (trackedTitle != null && trackedTitle.isNotEmpty)
         ? trackedTitle
         : title;
     final effectiveBody = (trackedBody != null && trackedBody.isNotEmpty)
         ? trackedBody
         : body;
+    final normalizedBody = effectiveBody
+        .replaceAll(
+          '\u00C3\u0083\u00C2\u00A2\u00C3\u00A2\u00E2\u201A\u00AC\u0161\u00C3\u201A\u00C2\u00A2',
+          ' - ',
+        )
+        .replaceAll('\u00C3\u00A2\u00E2\u201A\u00AC\u00C2\u00A2', ' - ')
+        .replaceAll('\u00E2\u20AC\u00A2', ' - ')
+        .replaceAll('\u2022', ' - ');
 
-    // For habits keep body identical; for tasks append a snooze note.
+    // Always include an explicit snooze line so users can see the new delay.
     final snoozeNote = snoozeDuration < 60
-        ? 'Snoozed • ${snoozeDuration} min'
-        : 'Snoozed • ${snoozeDuration ~/ 60} hr';
-    final snoozedBody = isHabit
-        ? effectiveBody
-        : (effectiveBody.trim().isEmpty
-              ? snoozeNote
-              : '$effectiveBody\n$snoozeNote');
+        ? 'Snoozed - ${snoozeDuration} min'
+        : 'Snoozed - ${snoozeDuration ~/ 60} hr';
+    final snoozedBody = normalizedBody.trim().isEmpty
+        ? snoozeNote
+        : '$normalizedBody\n$snoozeNote';
 
-    // ── Resolve channel / stream ─────────────────────────────────────
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Resolve channel / stream ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     final effectiveChannelKey =
         trackedChannelKey ?? channelKeyOverride ?? settings.defaultChannel;
     final effectiveAudioStream =
         trackedAudioStream ?? settings.notificationAudioStream;
 
-    // ── Load the entity ──────────────────────────────────────────────
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Load the entity ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     Task? task;
     Habit? habit;
     if (isHabit) {
@@ -4648,11 +5238,11 @@ class NotificationService {
         trackedUseAlarmMode ||
         (isSpecial && settings.alwaysUseAlarmForSpecialTasks);
 
-    // ── Decide native vs Flutter scheduling path ─────────────────────
+    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Decide native vs Flutter scheduling path ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     // 1. Primary: the original was found in the native alarm tracker.
     // 2. Tracked entry says oneShot with non-notification stream.
     // 3. Live settings say a non-notification audio stream (alarm/media/ring)
-    //    or custom sound — replicate the same logic scheduleHabitReminder uses
+    //    or custom sound ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â replicate the same logic scheduleHabitReminder uses
     //    so snooze from the UI popup (which has no originalNotificationId)
     //    also routes through the native path.
     bool liveSettingsNeedNative = false;
@@ -4672,7 +5262,7 @@ class NotificationService {
         liveSettingsNeedNative;
 
     print(
-      '⏰ snoozeNotification: isHabit=$isHabit, trackedIsNativeAlarm=$trackedIsNativeAlarm, '
+      'ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â° snoozeNotification: isHabit=$isHabit, trackedIsNativeAlarm=$trackedIsNativeAlarm, '
       'trackedOneShot=$trackedOneShot, audioStream=$effectiveAudioStream, '
       'liveSettingsNeedNative=$liveSettingsNeedNative, shouldUseNative=$shouldUseNative, '
       'isSpecial=$isSpecial, useAlarmMode=$useAlarmMode',
@@ -4747,7 +5337,7 @@ class NotificationService {
         });
       }
     } else {
-      // Flutter-scheduled notification – pass the same flags the original
+      // Flutter-scheduled notification ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ pass the same flags the original
       // scheduleHabitReminder / scheduleTaskReminder would have used.
       await _scheduleNotification(
         id: originalNotificationId ?? fallbackId,
@@ -4769,7 +5359,7 @@ class NotificationService {
     }
 
     print(
-      '⏰ NotificationService: Snoozed notification for $snoozeDuration minutes (Count: $currentSnoozeCount/${settings.maxSnoozeCount})',
+      'ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â° NotificationService: Snoozed notification for $snoozeDuration minutes (Count: $currentSnoozeCount/${settings.maxSnoozeCount})',
     );
   }
 }

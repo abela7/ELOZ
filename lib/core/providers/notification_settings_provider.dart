@@ -6,6 +6,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:app_settings/app_settings.dart';
 import '../models/notification_settings.dart';
+import '../notifications/models/notification_hub_modules.dart';
+import '../notifications/notification_hub.dart';
 import '../services/notification_service.dart';
 import '../services/android_system_status.dart';
 
@@ -14,9 +16,11 @@ const String _notificationSettingsKey = 'notification_settings';
 
 /// Provider for notification settings
 final notificationSettingsProvider =
-    StateNotifierProvider<NotificationSettingsNotifier, NotificationSettings>((ref) {
-  return NotificationSettingsNotifier();
-});
+    StateNotifierProvider<NotificationSettingsNotifier, NotificationSettings>((
+      ref,
+    ) {
+      return NotificationSettingsNotifier();
+    });
 
 /// State notifier for notification settings
 class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
@@ -31,7 +35,7 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final jsonString = prefs.getString(_notificationSettingsKey);
-    
+
     if (jsonString != null) {
       state = NotificationSettings.fromJsonString(jsonString);
     }
@@ -48,7 +52,8 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
     // - defaultSound is a custom URI (meaning user explicitly chose a tone)
     if (Platform.isAndroid) {
       final ds = state.defaultSound.toLowerCase();
-      final isCustomTone = ds.startsWith('content://') || ds.startsWith('file://');
+      final isCustomTone =
+          ds.startsWith('content://') || ds.startsWith('file://');
       if (state.urgentRemindersSound == 'alarm' &&
           state.taskRemindersSound == 'default' &&
           isCustomTone) {
@@ -56,7 +61,10 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
         await _saveSettings();
       }
     }
-    
+
+    // Hub module settings are authoritative for task module enablement.
+    await _syncTaskToggleFromHubAuthority();
+
     // Update permission states
     await refreshPermissionStates();
   }
@@ -65,7 +73,7 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_notificationSettingsKey, state.toJsonString());
-    
+
     // Notify the NotificationService to reload settings
     try {
       await NotificationService().reloadSettings();
@@ -119,7 +127,8 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
         // IMPORTANT: "Unrestricted battery usage" in system UI often maps to
         // background restriction state, not (only) doze optimization whitelist.
         final battery = await AndroidSystemStatus.getBatteryStatus();
-        final isBackgroundRestricted = battery['isBackgroundRestricted'] as bool? ?? false;
+        final isBackgroundRestricted =
+            battery['isBackgroundRestricted'] as bool? ?? false;
         final isIgnoringBatteryOptimizations =
             battery['isIgnoringBatteryOptimizations'] as bool? ?? false;
 
@@ -136,7 +145,8 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
       try {
         // On Android 14+, canUseFullScreenIntent() returns the actual permission state.
         // On older Android, it always returns true.
-        hasFullScreenIntentPermission = await AndroidSystemStatus.canUseFullScreenIntent();
+        hasFullScreenIntentPermission =
+            await AndroidSystemStatus.canUseFullScreenIntent();
       } catch (e) {
         print('⚠️ Error checking full screen intent permission: $e');
         // Assume granted if check fails (older Android or method not available)
@@ -211,7 +221,8 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
     if (Platform.isAndroid) {
       final androidPlugin = _notificationsPlugin
           .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>();
+            AndroidFlutterLocalNotificationsPlugin
+          >();
       if (androidPlugin != null) {
         final granted = await androidPlugin.requestExactAlarmsPermission();
         await refreshPermissionStates();
@@ -241,9 +252,13 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
         await refreshPermissionStates();
         return state.hasBatteryOptimizationExemption;
       } catch (e) {
-        print('⚠️ NotificationSettingsProvider: Error requesting battery optimization: $e');
+        print(
+          '⚠️ NotificationSettingsProvider: Error requesting battery optimization: $e',
+        );
         // Fallback: open battery settings directly
-        await AppSettings.openAppSettings(type: AppSettingsType.batteryOptimization);
+        await AppSettings.openAppSettings(
+          type: AppSettingsType.batteryOptimization,
+        );
         await refreshPermissionStates();
         return false;
       }
@@ -260,7 +275,9 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
       try {
         await AppSettings.openAppSettings(type: AppSettingsType.notification);
       } catch (e) {
-        print('⚠️ NotificationSettingsProvider: Error opening notification settings: $e');
+        print(
+          '⚠️ NotificationSettingsProvider: Error opening notification settings: $e',
+        );
         await AppSettings.openAppSettings();
       }
     }
@@ -278,9 +295,13 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
   /// Open battery optimization settings
   Future<void> openBatteryOptimizationSettings() async {
     try {
-      await AppSettings.openAppSettings(type: AppSettingsType.batteryOptimization);
+      await AppSettings.openAppSettings(
+        type: AppSettingsType.batteryOptimization,
+      );
     } catch (e) {
-      print('⚠️ NotificationSettingsProvider: Error opening battery settings: $e');
+      print(
+        '⚠️ NotificationSettingsProvider: Error opening battery settings: $e',
+      );
       await AppSettings.openAppSettings();
     }
   }
@@ -299,7 +320,9 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
   Future<void> openChannelSettings(String channelId) async {
     if (Platform.isAndroid) {
       // Map logical channel keys to actual Android channel IDs (task_reminders is versioned).
-      final resolved = await NotificationService().resolveAndroidChannelId(channelId);
+      final resolved = await NotificationService().resolveAndroidChannelId(
+        channelId,
+      );
       await AndroidSystemStatus.openChannelSettings(resolved);
     } else {
       await openNotificationSettings();
@@ -363,6 +386,10 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
   // === Global Setting Update Methods ===
 
   Future<void> setNotificationsEnabled(bool enabled) async {
+    final appliedToHub = await _setTaskModuleToggleInHub(enabled);
+    if (!appliedToHub) {
+      return;
+    }
     state = state.copyWith(notificationsEnabled: enabled);
     await _saveSettings();
   }
@@ -624,9 +651,11 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
     state = NotificationSettings.defaults.copyWith(
       hasNotificationPermission: currentPermissions.hasNotificationPermission,
       hasExactAlarmPermission: currentPermissions.hasExactAlarmPermission,
-      hasFullScreenIntentPermission: currentPermissions.hasFullScreenIntentPermission,
+      hasFullScreenIntentPermission:
+          currentPermissions.hasFullScreenIntentPermission,
       hasOverlayPermission: currentPermissions.hasOverlayPermission,
-      hasBatteryOptimizationExemption: currentPermissions.hasBatteryOptimizationExemption,
+      hasBatteryOptimizationExemption:
+          currentPermissions.hasBatteryOptimizationExemption,
     );
     await _saveSettings();
   }
@@ -671,7 +700,7 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
 
   /// Check if all optional permissions are granted
   bool get hasAllOptionalPermissions =>
-      state.hasFullScreenIntentPermission && 
+      state.hasFullScreenIntentPermission &&
       state.hasOverlayPermission &&
       state.hasBatteryOptimizationExemption;
 
@@ -728,4 +757,40 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
 
   /// Total permission count
   int get totalPermissionCount => Platform.isAndroid ? 5 : 1;
+
+  Future<bool> _setTaskModuleToggleInHub(bool enabled) async {
+    try {
+      final hub = NotificationHub();
+      await hub.initialize();
+      final current = await hub.getModuleSettings(
+        NotificationHubModuleIds.task,
+      );
+      await hub.setModuleSettings(
+        NotificationHubModuleIds.task,
+        current.copyWith(notificationsEnabled: enabled),
+      );
+      return true;
+    } catch (_) {
+      // Hub is authoritative; if this fails we do not apply local divergence.
+      return false;
+    }
+  }
+
+  Future<void> _syncTaskToggleFromHubAuthority() async {
+    try {
+      final hub = NotificationHub();
+      await hub.initialize();
+      final moduleSettings = await hub.getModuleSettings(
+        NotificationHubModuleIds.task,
+      );
+      final hubEnabled = moduleSettings.notificationsEnabled;
+      if (hubEnabled == null || state.notificationsEnabled == hubEnabled) {
+        return;
+      }
+      state = state.copyWith(notificationsEnabled: hubEnabled);
+      await _saveSettings();
+    } catch (_) {
+      // Keep local state when hub is unavailable; next successful read re-syncs.
+    }
+  }
 }

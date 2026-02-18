@@ -663,7 +663,8 @@ class AlarmPlayerService : Service() {
                     for (i in 0 until arr.length()) {
                         val obj = arr.getJSONObject(i)
                         val actionId = obj.optString("actionId", "")
-                        val label = obj.optString("label", "Action")
+                        val rawLabel = obj.optString("label", "Action")
+                        val label = normalizeActionLabel(actionId, rawLabel)
                         if (actionId.isBlank()) continue
                         val actionIntent = Intent(this, NativeReminderNotificationReceiver::class.java).apply {
                             action = NativeReminderNotificationReceiver.ACTION_ACTION
@@ -722,7 +723,7 @@ class AlarmPlayerService : Service() {
         }
         builder.addAction(
             android.R.drawable.checkbox_on_background,
-            "✓ Done",
+            "Done",
             PendingIntent.getBroadcast(
                 this, alarmId + 1, doneIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -745,7 +746,7 @@ class AlarmPlayerService : Service() {
             }
             builder.addAction(
                 android.R.drawable.ic_media_next,
-                "⏭ Skip",
+                "Skip",
                 PendingIntent.getBroadcast(
                     this, alarmId + 4, skipIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -766,6 +767,24 @@ class AlarmPlayerService : Service() {
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
             )
+        }
+    }
+
+    private fun normalizeActionLabel(actionId: String, rawLabel: String): String {
+        val cleaned = rawLabel
+            .replace('•', '-')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .replace(Regex("^[^A-Za-z0-9]+"), "")
+            .trim()
+
+        return when (actionId) {
+            "mark_done", "done" -> "Done"
+            "skip" -> "Skip"
+            "view", "open" -> "View"
+            "snooze_5" -> "Snooze 5m"
+            "snooze" -> if (cleaned.isBlank()) "Snooze" else cleaned
+            else -> if (cleaned.isBlank()) "Action" else cleaned
         }
     }
 

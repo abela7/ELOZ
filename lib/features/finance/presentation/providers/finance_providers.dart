@@ -32,6 +32,7 @@ import '../../data/services/bill_service.dart';
 import '../../data/services/savings_goal_service.dart';
 import '../../data/services/finance_security_service.dart';
 import '../../data/services/finance_data_reset_service.dart';
+import '../../../../core/utils/perf_trace.dart';
 import '../services/finance_access_guard.dart';
 
 // ==================== REPOSITORY PROVIDERS ====================
@@ -146,13 +147,17 @@ final defaultCurrencyProvider = FutureProvider<String>((ref) async {
 
 /// All transactions provider
 final allTransactionsProvider = FutureProvider<List<Transaction>>((ref) async {
+  final trace = PerfTrace('FinanceProvider.allTransactions');
   final repository = ref.watch(transactionRepositoryProvider);
-  return await repository.getAllTransactions();
+  final transactions = await repository.getAllTransactions();
+  trace.end('done', details: {'count': transactions.length});
+  return transactions;
 });
 
 /// Transactions for a specific date provider
 final transactionsForDateProvider =
     FutureProvider.family<List<Transaction>, DateTime>((ref, date) async {
+      final trace = PerfTrace('FinanceProvider.transactionsForDate');
       final repository = ref.watch(transactionRepositoryProvider);
       // Normalize date to midnight for consistent provider keys
       final localDate = date.toLocal();
@@ -161,7 +166,15 @@ final transactionsForDateProvider =
         localDate.month,
         localDate.day,
       );
-      return await repository.getTransactionsForDate(normalizedDate);
+      trace.step(
+        'normalized',
+        details: {'date': normalizedDate.toIso8601String().split('T').first},
+      );
+      final transactions = await repository.getTransactionsForDate(
+        normalizedDate,
+      );
+      trace.end('done', details: {'count': transactions.length});
+      return transactions;
     });
 
 /// All transaction categories provider
@@ -307,8 +320,11 @@ final totalBalanceProvider = FutureProvider<Map<String, double>>((ref) async {
 /// Daily total balance provider (by date)
 final dailyTotalBalanceProvider =
     FutureProvider.family<Map<String, double>, DateTime>((ref, date) async {
+      final trace = PerfTrace('FinanceProvider.dailyTotalBalance');
       final service = ref.watch(dailyBalanceServiceProvider);
-      return await service.getTotalBalanceByCurrencyForDate(date);
+      final balances = await service.getTotalBalanceByCurrencyForDate(date);
+      trace.end('done', details: {'currencies': balances.length});
+      return balances;
     });
 
 // ==================== STATISTICS PROVIDERS ====================
@@ -317,9 +333,15 @@ final dailyTotalBalanceProvider =
 final monthlyStatisticsProvider = FutureProvider<Map<String, dynamic>>((
   ref,
 ) async {
+  final trace = PerfTrace('FinanceProvider.monthlyStatistics');
   final service = ref.watch(financeStatisticsServiceProvider);
   final defaultCurrency = await ref.watch(defaultCurrencyProvider.future);
-  return await service.getMonthlyStatistics(defaultCurrency: defaultCurrency);
+  trace.step('default_currency_ready', details: {'currency': defaultCurrency});
+  final stats = await service.getMonthlyStatistics(
+    defaultCurrency: defaultCurrency,
+  );
+  trace.end('done');
+  return stats;
 });
 
 /// Yearly statistics provider
@@ -436,12 +458,15 @@ final totalDebtByCurrencyProvider = FutureProvider<Map<String, double>>((
 /// Total debt by currency as-of selected day provider.
 final totalDebtByCurrencyForDateProvider =
     FutureProvider.family<Map<String, double>, DateTime>((ref, date) async {
+      final trace = PerfTrace('FinanceProvider.totalDebtForDate');
       final repository = ref.watch(debtRepositoryProvider);
       final normalizedDate = DateTime(date.year, date.month, date.day);
-      return await repository.getTotalDebtByCurrencyAsOf(
+      final debts = await repository.getTotalDebtByCurrencyAsOf(
         normalizedDate,
         direction: DebtDirection.owed,
       );
+      trace.end('done', details: {'currencies': debts.length});
+      return debts;
     });
 
 /// Total lent by currency provider

@@ -31,6 +31,12 @@
 
 Every mini app follows the same 3-phase pattern:
 
+### Hard Gate (Must Follow)
+
+- New modules must go through **Universal Notifications + Notification Hub** only.
+- Do not introduce new legacy scheduler paths that call module-specific reminder logic directly.
+- Use `MINI_APP_NOTIFICATION_TEMPLATE.md` as the implementation checklist.
+
 ### Phase 1: Link to the Hub
 
 1. **Reserve an ID range** in `core/notifications/models/notification_hub_modules.dart`:

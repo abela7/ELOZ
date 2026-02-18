@@ -1,7 +1,8 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/dark_gradient.dart';
+import '../../../../core/utils/perf_trace.dart';
 import '../../../../core/widgets/date_navigator_widget.dart';
 import '../../data/models/habit.dart';
 import '../../data/services/quit_habit_report_security_service.dart';
@@ -45,6 +46,7 @@ class _HabitsScreenState extends ConsumerState<HabitsScreen> {
       QuitHabitReportSecurityService();
   bool _requiresQuitUnlock = true;
   bool _quitPolicyLoaded = false;
+  int _buildCount = 0;
 
   bool get _quitHabitsLocked =>
       !_quitPolicyLoaded ||
@@ -316,16 +318,29 @@ class _HabitsScreenState extends ConsumerState<HabitsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final trace = PerfTrace('HabitsScreen.build#${++_buildCount}');
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final habitsAsync = ref.watch(habitNotifierProvider);
 
-    return Scaffold(
+    final widget = Scaffold(
       body: isDark
           ? DarkGradient.wrap(
               child: _buildContent(context, isDark, habitsAsync),
             )
           : _buildContent(context, isDark, habitsAsync),
     );
+    trace.end(
+      'done',
+      details: {
+        'isDark': isDark,
+        'state': habitsAsync.when(
+          data: (_) => 'data',
+          loading: () => 'loading',
+          error: (_, __) => 'error',
+        ),
+      },
+    );
+    return widget;
   }
 
   Widget _buildContent(
@@ -470,17 +485,17 @@ class _HabitsScreenState extends ConsumerState<HabitsScreen> {
     );
   }
 
-  Widget _buildHabitsContent(
-    BuildContext context,
-    bool isDark,
-  ) {
+  Widget _buildHabitsContent(BuildContext context, bool isDark) {
+    final trace = PerfTrace('HabitsScreen.buildHabitsContent');
     final quitLocked = _quitHabitsLocked;
     final selectedDateOnly = DateTime(
       _selectedDate.year,
       _selectedDate.month,
       _selectedDate.day,
     );
-    final dailyStatsAsync = ref.watch(dailyHabitStatsProvider(selectedDateOnly));
+    final dailyStatsAsync = ref.watch(
+      dailyHabitStatsProvider(selectedDateOnly),
+    );
     final dashboardLists = ref.watch(
       habitsDashboardListsProvider((
         date: selectedDateOnly,
@@ -490,9 +505,25 @@ class _HabitsScreenState extends ConsumerState<HabitsScreen> {
         showOnlySpecial: _showOnlySpecial,
       )),
     );
+    trace.step(
+      'providers_ready',
+      details: {
+        'date': selectedDateOnly.toIso8601String().split('T').first,
+        'quitLocked': quitLocked,
+        'displayHabits': dashboardLists.displayHabits.length,
+      },
+    );
 
     return dailyStatsAsync.when(
       data: (stats) {
+        trace.step(
+          'daily_stats_ready',
+          details: {
+            'total': stats.total,
+            'completed': stats.completed,
+            'pending': stats.pending,
+          },
+        );
         final displayHabits = dashboardLists.displayHabits;
         final completedHabitsList = dashboardLists.completedHabits;
         final skippedHabitsList = dashboardLists.skippedHabits;
@@ -507,8 +538,18 @@ class _HabitsScreenState extends ConsumerState<HabitsScreen> {
 
         // Calculate progress percentage
         final progress = stats.total > 0 ? stats.completed / stats.total : 0.0;
+        trace.step(
+          'lists_prepared',
+          details: {
+            'display': displayHabits.length,
+            'completed': completedHabitsList.length,
+            'skipped': skippedHabitsList.length,
+            'notDue': notDueHabits.length,
+            'progress': progress.toStringAsFixed(2),
+          },
+        );
 
-        return GestureDetector(
+        final widget = GestureDetector(
           behavior: HitTestBehavior.opaque,
           onHorizontalDragEnd: (details) {
             if (details.primaryVelocity != null &&
@@ -849,9 +890,17 @@ class _HabitsScreenState extends ConsumerState<HabitsScreen> {
             ],
           ),
         );
+        trace.end('done');
+        return widget;
       },
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, s) => Center(child: Text('Error: $e')),
+      loading: () {
+        trace.end('loading');
+        return const Center(child: CircularProgressIndicator());
+      },
+      error: (e, s) {
+        trace.end('error', details: {'error': '$e'});
+        return Center(child: Text('Error: $e'));
+      },
     );
   }
 

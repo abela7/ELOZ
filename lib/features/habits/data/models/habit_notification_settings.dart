@@ -3,6 +3,10 @@ import 'dart:convert';
 const String habitNotificationSettingsKey = 'habit_notification_settings';
 
 class HabitNotificationSettings {
+  static const int minRollingWindowDays = 14;
+  static const int maxRollingWindowDays = 30;
+  static const int defaultRollingWindowDays = 30;
+
   // Permission states
   final bool hasNotificationPermission;
   final bool hasExactAlarmPermission;
@@ -42,7 +46,7 @@ class HabitNotificationSettings {
   // Quiet hours
   final bool quietHoursEnabled;
   final int quietHoursStart; // Minutes from midnight
-  final int quietHoursEnd;   // Minutes from midnight
+  final int quietHoursEnd; // Minutes from midnight
   final List<int> quietHoursDays; // 1-7 (Mon-Sun)
 
   // Behavior & display
@@ -115,7 +119,7 @@ class HabitNotificationSettings {
     this.smartSnooze = false,
     this.earlyMorningReminderEnabled = false,
     this.earlyMorningReminderHour = 7,
-    this.rollingWindowDays = 14,
+    this.rollingWindowDays = defaultRollingWindowDays,
   });
 
   static const HabitNotificationSettings defaults = HabitNotificationSettings();
@@ -168,33 +172,42 @@ class HabitNotificationSettings {
     int? rollingWindowDays,
   }) {
     return HabitNotificationSettings(
-      hasNotificationPermission: hasNotificationPermission ?? this.hasNotificationPermission,
-      hasExactAlarmPermission: hasExactAlarmPermission ?? this.hasExactAlarmPermission,
+      hasNotificationPermission:
+          hasNotificationPermission ?? this.hasNotificationPermission,
+      hasExactAlarmPermission:
+          hasExactAlarmPermission ?? this.hasExactAlarmPermission,
       hasFullScreenIntentPermission:
           hasFullScreenIntentPermission ?? this.hasFullScreenIntentPermission,
       hasOverlayPermission: hasOverlayPermission ?? this.hasOverlayPermission,
       hasBatteryOptimizationExemption:
-          hasBatteryOptimizationExemption ?? this.hasBatteryOptimizationExemption,
+          hasBatteryOptimizationExemption ??
+          this.hasBatteryOptimizationExemption,
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
       soundEnabled: soundEnabled ?? this.soundEnabled,
       vibrationEnabled: vibrationEnabled ?? this.vibrationEnabled,
       ledEnabled: ledEnabled ?? this.ledEnabled,
-      habitRemindersEnabled: habitRemindersEnabled ?? this.habitRemindersEnabled,
-      urgentRemindersEnabled: urgentRemindersEnabled ?? this.urgentRemindersEnabled,
-      silentRemindersEnabled: silentRemindersEnabled ?? this.silentRemindersEnabled,
+      habitRemindersEnabled:
+          habitRemindersEnabled ?? this.habitRemindersEnabled,
+      urgentRemindersEnabled:
+          urgentRemindersEnabled ?? this.urgentRemindersEnabled,
+      silentRemindersEnabled:
+          silentRemindersEnabled ?? this.silentRemindersEnabled,
       defaultUrgency: defaultUrgency ?? this.defaultUrgency,
       defaultSound: defaultSound ?? this.defaultSound,
       habitRemindersSound: habitRemindersSound ?? this.habitRemindersSound,
       urgentRemindersSound: urgentRemindersSound ?? this.urgentRemindersSound,
-      defaultVibrationPattern: defaultVibrationPattern ?? this.defaultVibrationPattern,
+      defaultVibrationPattern:
+          defaultVibrationPattern ?? this.defaultVibrationPattern,
       defaultChannel: defaultChannel ?? this.defaultChannel,
-      notificationAudioStream: notificationAudioStream ?? this.notificationAudioStream,
+      notificationAudioStream:
+          notificationAudioStream ?? this.notificationAudioStream,
       alwaysUseAlarmForSpecialHabits:
           alwaysUseAlarmForSpecialHabits ?? this.alwaysUseAlarmForSpecialHabits,
       specialHabitSound: specialHabitSound ?? this.specialHabitSound,
       specialHabitVibrationPattern:
           specialHabitVibrationPattern ?? this.specialHabitVibrationPattern,
-      specialHabitAlarmMode: specialHabitAlarmMode ?? this.specialHabitAlarmMode,
+      specialHabitAlarmMode:
+          specialHabitAlarmMode ?? this.specialHabitAlarmMode,
       allowSpecialDuringQuietHours:
           allowSpecialDuringQuietHours ?? this.allowSpecialDuringQuietHours,
       quietHoursEnabled: quietHoursEnabled ?? this.quietHoursEnabled,
@@ -203,22 +216,27 @@ class HabitNotificationSettings {
       quietHoursDays: quietHoursDays ?? this.quietHoursDays,
       showOnLockScreen: showOnLockScreen ?? this.showOnLockScreen,
       wakeScreen: wakeScreen ?? this.wakeScreen,
-      persistentNotifications: persistentNotifications ?? this.persistentNotifications,
+      persistentNotifications:
+          persistentNotifications ?? this.persistentNotifications,
       groupNotifications: groupNotifications ?? this.groupNotifications,
       notificationTimeout: notificationTimeout ?? this.notificationTimeout,
       habitTitleTemplate: habitTitleTemplate ?? this.habitTitleTemplate,
       habitBodyTemplate: habitBodyTemplate ?? this.habitBodyTemplate,
-      specialHabitTitleTemplate: specialHabitTitleTemplate ?? this.specialHabitTitleTemplate,
-      specialHabitBodyTemplate: specialHabitBodyTemplate ?? this.specialHabitBodyTemplate,
+      specialHabitTitleTemplate:
+          specialHabitTitleTemplate ?? this.specialHabitTitleTemplate,
+      specialHabitBodyTemplate:
+          specialHabitBodyTemplate ?? this.specialHabitBodyTemplate,
       defaultHabitReminderTime:
           defaultHabitReminderTime ?? this.defaultHabitReminderTime,
-      defaultSnoozeDuration: defaultSnoozeDuration ?? this.defaultSnoozeDuration,
+      defaultSnoozeDuration:
+          defaultSnoozeDuration ?? this.defaultSnoozeDuration,
       snoozeOptions: snoozeOptions ?? this.snoozeOptions,
       maxSnoozeCount: maxSnoozeCount ?? this.maxSnoozeCount,
       smartSnooze: smartSnooze ?? this.smartSnooze,
       earlyMorningReminderEnabled:
           earlyMorningReminderEnabled ?? this.earlyMorningReminderEnabled,
-      earlyMorningReminderHour: earlyMorningReminderHour ?? this.earlyMorningReminderHour,
+      earlyMorningReminderHour:
+          earlyMorningReminderHour ?? this.earlyMorningReminderHour,
       rollingWindowDays: rollingWindowDays ?? this.rollingWindowDays,
     );
   }
@@ -278,25 +296,35 @@ class HabitNotificationSettings {
   factory HabitNotificationSettings.fromJson(Map<String, dynamic> json) {
     final urgency = _normalizeUrgency(json['defaultUrgency'] as String?);
     final audioStream = _normalizeAudioStream(
-      json['notificationAudioStream'] as String? ?? json['streamOverride'] as String?,
+      json['notificationAudioStream'] as String? ??
+          json['streamOverride'] as String?,
     );
     final windowRaw =
-        (json['rollingWindowDays'] as num?)?.toInt() ?? defaults.rollingWindowDays;
-    final window = windowRaw < 1 ? defaults.rollingWindowDays : windowRaw;
-    final snoozeOptions = (json['snoozeOptions'] as List<dynamic>?)
+        (json['rollingWindowDays'] as num?)?.toInt() ??
+        defaults.rollingWindowDays;
+    final window = windowRaw
+        .clamp(minRollingWindowDays, maxRollingWindowDays)
+        .toInt();
+    final snoozeOptions =
+        (json['snoozeOptions'] as List<dynamic>?)
             ?.map((e) => (e as num).toInt())
             .toList() ??
         defaults.snoozeOptions;
 
     return HabitNotificationSettings(
-      hasNotificationPermission: json['hasNotificationPermission'] as bool? ?? false,
-      hasExactAlarmPermission: json['hasExactAlarmPermission'] as bool? ?? false,
-      hasFullScreenIntentPermission: json['hasFullScreenIntentPermission'] as bool? ?? false,
+      hasNotificationPermission:
+          json['hasNotificationPermission'] as bool? ?? false,
+      hasExactAlarmPermission:
+          json['hasExactAlarmPermission'] as bool? ?? false,
+      hasFullScreenIntentPermission:
+          json['hasFullScreenIntentPermission'] as bool? ?? false,
       hasOverlayPermission: json['hasOverlayPermission'] as bool? ?? false,
       hasBatteryOptimizationExemption:
           json['hasBatteryOptimizationExemption'] as bool? ?? false,
       notificationsEnabled:
-          json['notificationsEnabled'] as bool? ?? json['enabled'] as bool? ?? true,
+          json['notificationsEnabled'] as bool? ??
+          json['enabled'] as bool? ??
+          true,
       soundEnabled: json['soundEnabled'] as bool? ?? true,
       vibrationEnabled: json['vibrationEnabled'] as bool? ?? true,
       ledEnabled: json['ledEnabled'] as bool? ?? true,
@@ -305,54 +333,78 @@ class HabitNotificationSettings {
       silentRemindersEnabled: json['silentRemindersEnabled'] as bool? ?? false,
       defaultUrgency: urgency,
       defaultSound: json['defaultSound'] as String? ?? defaults.defaultSound,
-      habitRemindersSound: json['habitRemindersSound'] as String? ?? defaults.habitRemindersSound,
-      urgentRemindersSound: json['urgentRemindersSound'] as String? ?? defaults.urgentRemindersSound,
+      habitRemindersSound:
+          json['habitRemindersSound'] as String? ??
+          defaults.habitRemindersSound,
+      urgentRemindersSound:
+          json['urgentRemindersSound'] as String? ??
+          defaults.urgentRemindersSound,
       defaultVibrationPattern:
-          json['defaultVibrationPattern'] as String? ?? defaults.defaultVibrationPattern,
-      defaultChannel: _normalizeChannel(
-            json['defaultChannel'] as String?,
-          ) ??
+          json['defaultVibrationPattern'] as String? ??
+          defaults.defaultVibrationPattern,
+      defaultChannel:
+          _normalizeChannel(json['defaultChannel'] as String?) ??
           defaults.defaultChannel,
       notificationAudioStream: audioStream,
       alwaysUseAlarmForSpecialHabits:
-          json['alwaysUseAlarmForSpecialHabits'] as bool? ?? defaults.alwaysUseAlarmForSpecialHabits,
-      specialHabitSound: json['specialHabitSound'] as String? ?? defaults.specialHabitSound,
-      specialHabitVibrationPattern: json['specialHabitVibrationPattern'] as String? ??
+          json['alwaysUseAlarmForSpecialHabits'] as bool? ??
+          defaults.alwaysUseAlarmForSpecialHabits,
+      specialHabitSound:
+          json['specialHabitSound'] as String? ?? defaults.specialHabitSound,
+      specialHabitVibrationPattern:
+          json['specialHabitVibrationPattern'] as String? ??
           defaults.specialHabitVibrationPattern,
       specialHabitAlarmMode:
-          json['specialHabitAlarmMode'] as bool? ?? defaults.specialHabitAlarmMode,
-      allowSpecialDuringQuietHours: json['allowSpecialDuringQuietHours'] as bool? ??
+          json['specialHabitAlarmMode'] as bool? ??
+          defaults.specialHabitAlarmMode,
+      allowSpecialDuringQuietHours:
+          json['allowSpecialDuringQuietHours'] as bool? ??
           defaults.allowSpecialDuringQuietHours,
-      quietHoursEnabled: json['quietHoursEnabled'] as bool? ?? defaults.quietHoursEnabled,
-      quietHoursStart: json['quietHoursStart'] as int? ?? defaults.quietHoursStart,
+      quietHoursEnabled:
+          json['quietHoursEnabled'] as bool? ?? defaults.quietHoursEnabled,
+      quietHoursStart:
+          json['quietHoursStart'] as int? ?? defaults.quietHoursStart,
       quietHoursEnd: json['quietHoursEnd'] as int? ?? defaults.quietHoursEnd,
-      quietHoursDays: (json['quietHoursDays'] as List<dynamic>?)
+      quietHoursDays:
+          (json['quietHoursDays'] as List<dynamic>?)
               ?.map((e) => e as int)
               .toList() ??
           defaults.quietHoursDays,
-      showOnLockScreen: json['showOnLockScreen'] as bool? ?? defaults.showOnLockScreen,
+      showOnLockScreen:
+          json['showOnLockScreen'] as bool? ?? defaults.showOnLockScreen,
       wakeScreen: json['wakeScreen'] as bool? ?? defaults.wakeScreen,
       persistentNotifications:
-          json['persistentNotifications'] as bool? ?? defaults.persistentNotifications,
-      groupNotifications: json['groupNotifications'] as bool? ?? defaults.groupNotifications,
-      notificationTimeout: json['notificationTimeout'] as int? ?? defaults.notificationTimeout,
-      habitTitleTemplate: json['habitTitleTemplate'] as String? ?? defaults.habitTitleTemplate,
-      habitBodyTemplate: json['habitBodyTemplate'] as String? ?? defaults.habitBodyTemplate,
+          json['persistentNotifications'] as bool? ??
+          defaults.persistentNotifications,
+      groupNotifications:
+          json['groupNotifications'] as bool? ?? defaults.groupNotifications,
+      notificationTimeout:
+          json['notificationTimeout'] as int? ?? defaults.notificationTimeout,
+      habitTitleTemplate:
+          json['habitTitleTemplate'] as String? ?? defaults.habitTitleTemplate,
+      habitBodyTemplate:
+          json['habitBodyTemplate'] as String? ?? defaults.habitBodyTemplate,
       specialHabitTitleTemplate:
-          json['specialHabitTitleTemplate'] as String? ?? defaults.specialHabitTitleTemplate,
+          json['specialHabitTitleTemplate'] as String? ??
+          defaults.specialHabitTitleTemplate,
       specialHabitBodyTemplate:
-          json['specialHabitBodyTemplate'] as String? ?? defaults.specialHabitBodyTemplate,
+          json['specialHabitBodyTemplate'] as String? ??
+          defaults.specialHabitBodyTemplate,
       defaultHabitReminderTime:
-          json['defaultHabitReminderTime'] as String? ?? defaults.defaultHabitReminderTime,
+          json['defaultHabitReminderTime'] as String? ??
+          defaults.defaultHabitReminderTime,
       defaultSnoozeDuration:
-          json['defaultSnoozeDuration'] as int? ?? defaults.defaultSnoozeDuration,
+          json['defaultSnoozeDuration'] as int? ??
+          defaults.defaultSnoozeDuration,
       snoozeOptions: snoozeOptions,
       maxSnoozeCount: json['maxSnoozeCount'] as int? ?? defaults.maxSnoozeCount,
       smartSnooze: json['smartSnooze'] as bool? ?? defaults.smartSnooze,
       earlyMorningReminderEnabled:
-          json['earlyMorningReminderEnabled'] as bool? ?? defaults.earlyMorningReminderEnabled,
+          json['earlyMorningReminderEnabled'] as bool? ??
+          defaults.earlyMorningReminderEnabled,
       earlyMorningReminderHour:
-          json['earlyMorningReminderHour'] as int? ?? defaults.earlyMorningReminderHour,
+          json['earlyMorningReminderHour'] as int? ??
+          defaults.earlyMorningReminderHour,
       rollingWindowDays: window,
     );
   }
@@ -375,7 +427,8 @@ class HabitNotificationSettings {
     }
     final currentMinutes = time.hour * 60 + time.minute;
     if (quietHoursStart > quietHoursEnd) {
-      return currentMinutes >= quietHoursStart || currentMinutes < quietHoursEnd;
+      return currentMinutes >= quietHoursStart ||
+          currentMinutes < quietHoursEnd;
     }
     return currentMinutes >= quietHoursStart && currentMinutes < quietHoursEnd;
   }
@@ -395,7 +448,16 @@ class HabitNotificationSettings {
   }
 
   static String getWeekdayName(int weekday) {
-    const days = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const days = [
+      '',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
     return days[weekday];
   }
 
@@ -447,7 +509,9 @@ class HabitNotificationSettings {
     if (sound.startsWith('file://') || sound.contains('/')) {
       try {
         final uri = Uri.parse(sound);
-        final fileName = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : sound;
+        final fileName = uri.pathSegments.isNotEmpty
+            ? uri.pathSegments.last
+            : sound;
         final dotIndex = fileName.lastIndexOf('.');
         return dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName;
       } catch (_) {
@@ -512,8 +576,18 @@ class HabitNotificationSettings {
   }
 
   static const List<String> availableSounds = ['default', 'alarm', 'silent'];
-  static const List<String> availableAudioStreams = ['notification', 'alarm', 'ring', 'media'];
-  static const List<String> availableVibrationPatterns = ['default', 'short', 'long', 'staccato'];
+  static const List<String> availableAudioStreams = [
+    'notification',
+    'alarm',
+    'ring',
+    'media',
+  ];
+  static const List<String> availableVibrationPatterns = [
+    'default',
+    'short',
+    'long',
+    'staccato',
+  ];
   static const List<String> availableReminderTimes = [
     'at_time',
     '5_min',

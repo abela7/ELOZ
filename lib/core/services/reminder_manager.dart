@@ -1,8 +1,14 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../models/reminder.dart';
 import '../models/pending_notification_info.dart';
 import '../notifications/models/notification_hub_modules.dart';
+import '../notifications/models/notification_hub_payload.dart';
 import '../notifications/notification_hub.dart';
+import '../notifications/services/notification_flow_trace.dart';
+import '../notifications/services/notification_module_policy.dart';
 import '../notifications/services/universal_notification_repository.dart';
 import '../../data/models/task.dart';
 import '../../features/habits/data/models/habit.dart';
@@ -24,6 +30,8 @@ class ReminderManager {
 
   final NotificationService _notificationService = NotificationService();
   final HabitReminderService _habitReminderService = HabitReminderService();
+  final NotificationHub _hub = NotificationHub();
+  final Map<String, Future<void>> _entityLocks = <String, Future<void>>{};
 
   /// Initialize the reminder manager
   Future<void> initialize({bool startupOptimized = false}) async {
@@ -120,29 +128,117 @@ class ReminderManager {
     return reminders.isNotEmpty ? reminders : [Reminder.fiveMinutesBefore()];
   }
 
-  /// Schedule reminders for a task
-  Future<void> scheduleRemindersForTask(Task task) async {
-    print('🔔 ReminderManager: Scheduling reminders for task "${task.title}"');
-    print('   Reminders raw: ${task.remindersJson}');
+  /// Schedule reminders for a task.
+  ///
+  /// [sourceFlow] should describe who triggered scheduling
+  /// (e.g. `task_update`, `recovery_resync`, `manual_sync`).
+  Future<void> scheduleRemindersForTask(
+    Task task, {
+    String sourceFlow = 'task_runtime',
+  }) async {
+    await _runEntityLocked(
+      scope: NotificationHubModuleIds.task,
+      entityId: task.id,
+      action: () => _scheduleRemindersForTaskUnlocked(
+        task,
+        sourceFlow: sourceFlow,
+      ),
+    );
+  }
 
-    final reminders = _parseTaskReminders(task);
+  Future<void> _scheduleRemindersForTaskUnlocked(
+    Task task, {
+    required String sourceFlow,
+  }) async {
+    final beforeIds = await _pendingIdsForEntity(
+      moduleId: NotificationHubModuleIds.task,
+      entityId: task.id,
+    );
 
-    print('   Parsed ${reminders.length} reminder(s)');
+    NotificationFlowTrace.log(
+      event: 'legacy_schedule_request',
+      sourceFlow: sourceFlow,
+      moduleId: NotificationHubModuleIds.task,
+      entityId: task.id,
+      details: <String, dynamic>{
+        'title': task.title,
+        'status': task.status,
+        'pendingBefore': beforeIds,
+        'remindersRaw': task.remindersJson ?? '',
+      },
+    );
 
-    if (reminders.isEmpty) {
-      print('   No reminders to schedule');
+    final policy = await NotificationModulePolicy.read(
+      NotificationHubModuleIds.task,
+    );
+    if (!policy.enabled) {
+      await _cancelRemindersForTaskUnlocked(
+        task.id,
+        sourceFlow: sourceFlow,
+        reason: policy.reason,
+      );
       return;
     }
 
-    // Don't schedule reminders for completed or not_done tasks
+    if (await _hasEnabledUniversalDefinitions(
+      moduleId: NotificationHubModuleIds.task,
+      entityId: task.id,
+    )) {
+      await _cancelRemindersForTaskUnlocked(
+        task.id,
+        sourceFlow: sourceFlow,
+        reason: 'universal_definition_enabled',
+      );
+      return;
+    }
+
+    final reminders = _parseTaskReminders(task);
+    if (reminders.isEmpty) {
+      NotificationFlowTrace.log(
+        event: 'legacy_schedule_skipped',
+        sourceFlow: sourceFlow,
+        moduleId: NotificationHubModuleIds.task,
+        entityId: task.id,
+        reason: 'no_enabled_reminders',
+      );
+      return;
+    }
+
+    // Don't schedule reminders for completed or not_done tasks.
     if (task.status == 'completed' || task.status == 'not_done') {
-      print('   Task is ${task.status}, skipping reminder');
+      NotificationFlowTrace.log(
+        event: 'legacy_schedule_skipped',
+        sourceFlow: sourceFlow,
+        moduleId: NotificationHubModuleIds.task,
+        entityId: task.id,
+        reason: 'task_status_${task.status}',
+      );
       return;
     }
 
     await _notificationService.scheduleMultipleReminders(
       task: task,
       reminders: reminders,
+      sourceFlow: sourceFlow,
+    );
+
+    final afterIds = await _pendingIdsForEntity(
+      moduleId: NotificationHubModuleIds.task,
+      entityId: task.id,
+    );
+    final scheduledIds = afterIds.where((id) => !beforeIds.contains(id)).toList()
+      ..sort();
+    NotificationFlowTrace.log(
+      event: 'legacy_schedule_result',
+      sourceFlow: sourceFlow,
+      moduleId: NotificationHubModuleIds.task,
+      entityId: task.id,
+      notificationIds: scheduledIds,
+      details: <String, dynamic>{
+        'pendingBefore': beforeIds,
+        'pendingAfter': afterIds,
+        'reminderCount': reminders.length,
+      },
     );
   }
 
@@ -163,20 +259,85 @@ class ReminderManager {
     return parseReminderString(raw).where((r) => r.enabled).toList();
   }
 
-  /// Schedule reminders for a habit
-  Future<void> scheduleRemindersForHabit(Habit habit) async {
-    await _habitReminderService.scheduleHabitReminders(habit);
+  /// Schedule reminders for a habit.
+  Future<void> scheduleRemindersForHabit(
+    Habit habit, {
+    String sourceFlow = 'habit_runtime',
+  }) async {
+    await _runEntityLocked(
+      scope: NotificationHubModuleIds.habit,
+      entityId: habit.id,
+      action: () => _habitReminderService.scheduleHabitReminders(
+        habit,
+        sourceFlow: sourceFlow,
+      ),
+    );
   }
 
-  /// Cancel reminders for a task
-  Future<void> cancelRemindersForTask(String taskId) async {
-    await _notificationService.cancelAllTaskReminders(taskId);
+  /// Cancel reminders for a task.
+  Future<void> cancelRemindersForTask(
+    String taskId, {
+    String sourceFlow = 'task_runtime',
+    String reason = 'cancel',
+  }) async {
+    await _runEntityLocked(
+      scope: NotificationHubModuleIds.task,
+      entityId: taskId,
+      action: () => _cancelRemindersForTaskUnlocked(
+        taskId,
+        sourceFlow: sourceFlow,
+        reason: reason,
+      ),
+    );
+  }
+
+  Future<void> _cancelRemindersForTaskUnlocked(
+    String taskId, {
+    required String sourceFlow,
+    required String reason,
+  }) async {
+    final beforeIds = await _pendingIdsForEntity(
+      moduleId: NotificationHubModuleIds.task,
+      entityId: taskId,
+    );
+    await _notificationService.cancelAllTaskReminders(
+      taskId,
+      sourceFlow: sourceFlow,
+      reason: reason,
+    );
+    await _cancelHubRemindersForTask(taskId);
+    await _cancelNativeAlarmsForEntity('task', taskId);
+    final afterIds = await _pendingIdsForEntity(
+      moduleId: NotificationHubModuleIds.task,
+      entityId: taskId,
+    );
+    final cancelledIds = beforeIds.where((id) => !afterIds.contains(id)).toList()
+      ..sort();
+    NotificationFlowTrace.log(
+      event: 'legacy_cancel_result',
+      sourceFlow: sourceFlow,
+      moduleId: NotificationHubModuleIds.task,
+      entityId: taskId,
+      reason: reason,
+      notificationIds: cancelledIds,
+      details: <String, dynamic>{
+        'pendingBefore': beforeIds,
+        'pendingAfter': afterIds,
+      },
+    );
   }
 
   Future<void> _cancelHubRemindersForTask(String taskId) async {
-    await NotificationHub().cancelForEntity(
+    await _hub.cancelForEntity(
       moduleId: NotificationHubModuleIds.task,
       entityId: taskId,
+    );
+  }
+
+  Future<void> _cancelHubRemindersForHabit(String habitId) async {
+    await _hub.cancelForEntity(
+      moduleId: NotificationHubModuleIds.habit,
+      entityId: habitId,
     );
   }
 
@@ -184,10 +345,61 @@ class ReminderManager {
     await UniversalNotificationRepository().deleteByEntity(taskId);
   }
 
-  /// Cancel reminders for a habit
-  Future<void> cancelRemindersForHabit(String habitId) async {
-    await _habitReminderService.cancelHabitReminders(habitId);
+  Future<void> _deleteUniversalHabitDefinitions(String habitId) async {
+    await UniversalNotificationRepository().deleteByEntity(habitId);
+  }
+
+  /// Cancel reminders for a habit.
+  Future<void> cancelRemindersForHabit(
+    String habitId, {
+    String sourceFlow = 'habit_runtime',
+    String reason = 'cancel',
+  }) async {
+    await _runEntityLocked(
+      scope: NotificationHubModuleIds.habit,
+      entityId: habitId,
+      action: () => _cancelRemindersForHabitUnlocked(
+        habitId,
+        sourceFlow: sourceFlow,
+        reason: reason,
+      ),
+    );
+  }
+
+  Future<void> _cancelRemindersForHabitUnlocked(
+    String habitId, {
+    required String sourceFlow,
+    required String reason,
+  }) async {
+    final beforeIds = await _pendingIdsForEntity(
+      moduleId: NotificationHubModuleIds.habit,
+      entityId: habitId,
+    );
+    await _habitReminderService.cancelHabitReminders(
+      habitId,
+      sourceFlow: sourceFlow,
+      reason: reason,
+    );
+    await _cancelHubRemindersForHabit(habitId);
     await _cancelNativeAlarmsForEntity('habit', habitId);
+    final afterIds = await _pendingIdsForEntity(
+      moduleId: NotificationHubModuleIds.habit,
+      entityId: habitId,
+    );
+    final cancelledIds = beforeIds.where((id) => !afterIds.contains(id)).toList()
+      ..sort();
+    NotificationFlowTrace.log(
+      event: 'legacy_cancel_result',
+      sourceFlow: sourceFlow,
+      moduleId: NotificationHubModuleIds.habit,
+      entityId: habitId,
+      reason: reason,
+      notificationIds: cancelledIds,
+      details: <String, dynamic>{
+        'pendingBefore': beforeIds,
+        'pendingAfter': afterIds,
+      },
+    );
   }
 
   /// Cancel reminders for all habits
@@ -206,15 +418,41 @@ class ReminderManager {
     );
   }
 
-  /// Reschedule reminders when task is updated
-  Future<void> rescheduleRemindersForTask(Task task) async {
-    await cancelRemindersForTask(task.id);
-    await scheduleRemindersForTask(task);
+  /// Reschedule reminders when task is updated.
+  Future<void> rescheduleRemindersForTask(
+    Task task, {
+    String sourceFlow = 'task_reschedule',
+  }) async {
+    await _runEntityLocked(
+      scope: NotificationHubModuleIds.task,
+      entityId: task.id,
+      action: () async {
+        await _cancelRemindersForTaskUnlocked(
+          task.id,
+          sourceFlow: sourceFlow,
+          reason: 'reschedule',
+        );
+        await _scheduleRemindersForTaskUnlocked(
+          task,
+          sourceFlow: sourceFlow,
+        );
+      },
+    );
   }
 
-  /// Reschedule reminders when habit is updated
-  Future<void> rescheduleRemindersForHabit(Habit habit) async {
-    await _habitReminderService.rescheduleHabitReminders(habit);
+  /// Reschedule reminders when habit is updated.
+  Future<void> rescheduleRemindersForHabit(
+    Habit habit, {
+    String sourceFlow = 'habit_reschedule',
+  }) async {
+    await _runEntityLocked(
+      scope: NotificationHubModuleIds.habit,
+      entityId: habit.id,
+      action: () => _habitReminderService.rescheduleHabitReminders(
+        habit,
+        sourceFlow: sourceFlow,
+      ),
+    );
   }
 
   /// Reschedule a single pending notification to a new absolute time.
@@ -250,23 +488,50 @@ class ReminderManager {
     );
   }
 
-  /// Handle task completion - cancel reminders
-  Future<void> handleTaskCompleted(Task task) async {
-    await cancelRemindersForTask(task.id);
-    await _cancelHubRemindersForTask(task.id);
+  /// Handle task completion - cancel reminders.
+  Future<void> handleTaskCompleted(
+    Task task, {
+    String sourceFlow = 'task_completed',
+  }) async {
+    await cancelRemindersForTask(
+      task.id,
+      sourceFlow: sourceFlow,
+      reason: 'task_completed',
+    );
   }
 
-  /// Handle task postpone - reschedule with new date
-  Future<void> handleTaskPostponed(Task task) async {
-    await rescheduleRemindersForTask(task);
+  /// Handle task postpone - reschedule with new date.
+  Future<void> handleTaskPostponed(
+    Task task, {
+    String sourceFlow = 'task_postponed',
+  }) async {
+    await rescheduleRemindersForTask(task, sourceFlow: sourceFlow);
   }
 
-  /// Handle task deletion - cancel reminders
-  Future<void> handleTaskDeleted(String taskId) async {
-    await cancelRemindersForTask(taskId);
-    await _cancelHubRemindersForTask(taskId);
+  /// Handle task deletion with canonical cleanup.
+  Future<void> handleTaskDeleted(
+    String taskId, {
+    String sourceFlow = 'task_deleted',
+  }) async {
     await _deleteUniversalTaskDefinitions(taskId);
-    await _cancelNativeAlarmsForEntity('task', taskId);
+    await cancelRemindersForTask(
+      taskId,
+      sourceFlow: sourceFlow,
+      reason: 'entity_deleted',
+    );
+  }
+
+  /// Handle habit deletion/archive with canonical cleanup.
+  Future<void> handleHabitDeleted(
+    String habitId, {
+    String sourceFlow = 'habit_deleted',
+  }) async {
+    await _deleteUniversalHabitDefinitions(habitId);
+    await cancelRemindersForHabit(
+      habitId,
+      sourceFlow: sourceFlow,
+      reason: 'entity_deleted',
+    );
   }
 
   /// Cancel native alarms for an entity (habit/task).
@@ -274,6 +539,76 @@ class ReminderManager {
   /// AlarmBootReceiver persistence and cancel by payload match.
   Future<void> _cancelNativeAlarmsForEntity(String type, String entityId) async {
     await AlarmService().cancelAlarmsForEntity(type, entityId);
+  }
+
+  Future<bool> _hasEnabledUniversalDefinitions({
+    required String moduleId,
+    required String entityId,
+  }) async {
+    final repo = UniversalNotificationRepository();
+    final definitions = await repo.getAll(
+      moduleId: moduleId,
+      entityId: entityId,
+      enabledOnly: true,
+    );
+    return definitions.isNotEmpty;
+  }
+
+  Future<T> _runEntityLocked<T>({
+    required String scope,
+    required String entityId,
+    required Future<T> Function() action,
+  }) async {
+    final key = '$scope|$entityId';
+    final previous = _entityLocks[key] ?? Future<void>.value();
+    final completer = Completer<void>();
+    final queued = previous.then((_) => completer.future);
+    _entityLocks[key] = queued;
+
+    await previous;
+    try {
+      return await action();
+    } finally {
+      completer.complete();
+      if (identical(_entityLocks[key], queued)) {
+        _entityLocks.remove(key);
+      }
+    }
+  }
+
+  @visibleForTesting
+  Future<T> runEntityLockedForTest<T>({
+    required String scope,
+    required String entityId,
+    required Future<T> Function() action,
+  }) {
+    return _runEntityLocked(
+      scope: scope,
+      entityId: entityId,
+      action: action,
+    );
+  }
+
+  Future<List<int>> _pendingIdsForEntity({
+    required String moduleId,
+    required String entityId,
+  }) async {
+    try {
+      final pending = await _notificationService.getDetailedPendingNotifications();
+      final ids = <int>{};
+      for (final info in pending) {
+        final parsed = NotificationHubPayload.tryParse(info.payload);
+        final pendingModuleId = parsed?.moduleId ?? info.type;
+        final pendingEntityId = parsed?.entityId ?? info.entityId;
+        if (pendingModuleId == moduleId && pendingEntityId == entityId) {
+          ids.add(info.id);
+        }
+      }
+      final list = ids.toList()..sort();
+      return list;
+    } catch (_) {
+      return const <int>[];
+    }
   }
 
   /// Get reminder descriptions for UI display

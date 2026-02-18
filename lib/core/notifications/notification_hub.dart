@@ -2,11 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../data/repositories/task_repository.dart';
+import '../../features/habits/data/repositories/habit_repository.dart';
 import '../models/notification_settings.dart';
 import '../models/pending_notification_info.dart';
 import '../services/notification_service.dart';
 import 'adapters/mini_app_notification_adapter.dart';
 import 'models/hub_module_notification_settings.dart';
+import 'models/notification_hub_modules.dart';
 import 'models/notification_hub_dashboard_summary.dart';
 import 'models/notification_hub_module.dart';
 import 'models/notification_hub_payload.dart';
@@ -16,6 +19,8 @@ import 'models/notification_lifecycle_event.dart';
 import 'models/notification_log_entry.dart';
 import 'models/universal_notification.dart';
 import 'services/custom_notification_type_store.dart';
+import 'services/notification_flow_trace.dart';
+import 'services/notification_module_policy.dart';
 import 'services/notification_source_resolver.dart';
 import 'services/universal_notification_repository.dart';
 import 'services/notification_hub_log_store.dart';
@@ -46,9 +51,7 @@ class NotificationHub {
   /// when something actually changes. Prevents log spam from repeated syncs.
   final Map<int, String> _lastScheduledAt = <int, String>{};
   static const Duration _adapterLookupTimeout = Duration(seconds: 2);
-  static const Duration _adapterLookupPollInterval = Duration(
-    milliseconds: 50,
-  );
+  static const Duration _adapterLookupPollInterval = Duration(milliseconds: 50);
 
   Future<void> initialize({bool startupOptimized = true}) async {
     if (_initialized) {
@@ -194,16 +197,55 @@ class NotificationHub {
       '$reminderValue',
       reminderUnit,
       if (scheduledAt != null)
-        '${scheduledAt.year.toString().padLeft(4, '0')}${scheduledAt.month.toString().padLeft(2, '0')}${scheduledAt.day.toString().padLeft(2, '0')}',
+        '${scheduledAt.year.toString().padLeft(4, '0')}'
+            '${scheduledAt.month.toString().padLeft(2, '0')}'
+            '${scheduledAt.day.toString().padLeft(2, '0')}'
+            '${scheduledAt.hour.toString().padLeft(2, '0')}'
+            '${scheduledAt.minute.toString().padLeft(2, '0')}'
+            '${scheduledAt.second.toString().padLeft(2, '0')}',
     ].join('|');
 
     final hash = signature.hashCode.abs();
     final module = _adapters[moduleId]?.module;
-    if (module == null || module.rangeSize <= 0) {
-      return hash % 2147483647;
+    if (module != null && module.rangeSize > 0) {
+      return module.idRangeStart + (hash % module.rangeSize);
     }
 
-    return module.idRangeStart + (hash % module.rangeSize);
+    int? rangeStart;
+    int? rangeEnd;
+    switch (moduleId) {
+      case NotificationHubModuleIds.task:
+        rangeStart = NotificationHubIdRanges.taskStart;
+        rangeEnd = NotificationHubIdRanges.taskEnd;
+        break;
+      case NotificationHubModuleIds.habit:
+        rangeStart = NotificationHubIdRanges.habitStart;
+        rangeEnd = NotificationHubIdRanges.habitEnd;
+        break;
+      case NotificationHubModuleIds.finance:
+        rangeStart = NotificationHubIdRanges.financeStart;
+        rangeEnd = NotificationHubIdRanges.financeEnd;
+        break;
+      case NotificationHubModuleIds.sleep:
+        rangeStart = NotificationHubIdRanges.sleepStart;
+        rangeEnd = NotificationHubIdRanges.sleepEnd;
+        break;
+      case NotificationHubModuleIds.mbtMood:
+        rangeStart = NotificationHubIdRanges.mbtMoodStart;
+        rangeEnd = NotificationHubIdRanges.mbtMoodEnd;
+        break;
+      case NotificationHubModuleIds.behavior:
+        rangeStart = NotificationHubIdRanges.behaviorStart;
+        rangeEnd = NotificationHubIdRanges.behaviorEnd;
+        break;
+    }
+
+    if (rangeStart != null && rangeEnd != null) {
+      final rangeSize = rangeEnd - rangeStart + 1;
+      return rangeStart + (hash % rangeSize);
+    }
+
+    return hash % 2147483647;
   }
 
   // ---------------------------------------------------------------------------
@@ -241,6 +283,7 @@ class NotificationHub {
     NotificationHubScheduleRequest request,
   ) async {
     await initialize();
+    final sourceFlow = request.extras['sourceFlow'] ?? 'hub_schedule';
 
     final adapter = _adapters[request.moduleId];
     if (adapter == null) {
@@ -322,6 +365,17 @@ class NotificationHub {
       reminderValue: '${request.reminderValue}',
       reminderUnit: request.reminderUnit,
       extras: payloadExtras,
+    );
+    NotificationFlowTrace.log(
+      event: 'hub_schedule_request',
+      sourceFlow: sourceFlow,
+      moduleId: request.moduleId,
+      entityId: request.entityId,
+      notificationId: notificationId,
+      details: <String, dynamic>{
+        'scheduledAt': request.scheduledAt.toIso8601String(),
+        'type': request.type,
+      },
     );
 
     // ── Resolve delivery config from notification type ──
@@ -418,8 +472,8 @@ class NotificationHub {
     // hundreds of duplicate "scheduled" entries from repeated sync cycles
     // (app start, resume, screen open, etc.).
     final scheduledAtIso = request.scheduledAt.toIso8601String();
-    final bool isRedundant = success &&
-        _lastScheduledAt[notificationId] == scheduledAtIso;
+    final bool isRedundant =
+        success && _lastScheduledAt[notificationId] == scheduledAtIso;
 
     if (success) {
       _lastScheduledAt[notificationId] = scheduledAtIso;
@@ -452,9 +506,11 @@ class NotificationHub {
                 effectiveSettings.allowUrgentDuringQuietHours,
             'isSpecial': isSpecial,
             'useFullScreenIntent': shouldUseFullScreen,
+            if (!success) 'failureReason': 'schedule_failed',
             if (moduleSettings.maxAllowedType != null)
               'maxAllowedType': moduleSettings.maxAllowedType,
-            if (typeOverride.hasOverrides) 'typeOverride': typeOverride.toJson(),
+            if (typeOverride.hasOverrides)
+              'typeOverride': typeOverride.toJson(),
             if (request.priority != null) 'priority': request.priority,
             if (payloadExtras.isNotEmpty) 'extras': payloadExtras,
           },
@@ -463,8 +519,25 @@ class NotificationHub {
     }
 
     if (success) {
+      NotificationFlowTrace.log(
+        event: 'hub_schedule_result',
+        sourceFlow: sourceFlow,
+        moduleId: request.moduleId,
+        entityId: request.entityId,
+        notificationId: notificationId,
+        details: const <String, dynamic>{'success': true},
+      );
       return NotificationHubScheduleResult.ok;
     }
+    NotificationFlowTrace.log(
+      event: 'hub_schedule_result',
+      sourceFlow: sourceFlow,
+      moduleId: request.moduleId,
+      entityId: request.entityId,
+      notificationId: notificationId,
+      reason: 'schedule_failed',
+      details: const <String, dynamic>{'success': false},
+    );
     return NotificationHubScheduleResult.failed(
       'Could not schedule. Check app notification settings, '
       'time (must be in future), or quiet hours.',
@@ -567,6 +640,14 @@ class NotificationHub {
       );
     }
 
+    NotificationFlowTrace.log(
+      event: 'hub_cancel_result',
+      sourceFlow: 'cancel_for_entity',
+      moduleId: moduleId,
+      entityId: entityId,
+      notificationIds: (cancelledIds.toList()..sort()),
+      details: <String, dynamic>{'cancelledCount': cancelledIds.length},
+    );
     return cancelledIds.length;
   }
 
@@ -612,6 +693,13 @@ class NotificationHub {
       );
     }
 
+    NotificationFlowTrace.log(
+      event: 'hub_cancel_result',
+      sourceFlow: 'cancel_for_module',
+      moduleId: moduleId,
+      notificationIds: (cancelledIds.toList()..sort()),
+      details: <String, dynamic>{'cancelledCount': cancelledIds.length},
+    );
     return cancelledIds.length;
   }
 
@@ -730,6 +818,7 @@ class NotificationHub {
     String? title,
     String? body,
     Map<String, dynamic>? metadata,
+
     /// When payload is null or unparseable, use these for correct source tracking.
     String? moduleId,
     String? section,
@@ -745,13 +834,19 @@ class NotificationHub {
     var logModuleId = parsed?.moduleId ?? moduleId;
     var finalEntityId = entityId ?? parsed?.entityId ?? '';
 
-    if (logModuleId == null || logModuleId.isEmpty || logModuleId == 'unknown') {
-      final resolved = await NotificationSourceResolver().resolve(notificationId);
+    if (logModuleId == null ||
+        logModuleId.isEmpty ||
+        logModuleId == 'unknown') {
+      final resolved = await NotificationSourceResolver().resolve(
+        notificationId,
+      );
       if (resolved != null) {
         logModuleId = resolved.moduleId;
         if (finalEntityId.isEmpty) finalEntityId = resolved.entityId;
         if ((payload ?? '').isEmpty) {
-          payload = NotificationSourceResolver.buildPayloadFromResolved(resolved);
+          payload = NotificationSourceResolver.buildPayloadFromResolved(
+            resolved,
+          );
         }
       } else {
         logModuleId = 'unknown';
@@ -768,6 +863,14 @@ class NotificationHub {
         event: NotificationLifecycleEvent.cancelled,
         metadata: metadata ?? const <String, dynamic>{},
       ),
+    );
+    final traceSource = metadata?['source']?.toString() ?? 'cancel_by_id';
+    NotificationFlowTrace.log(
+      event: 'hub_cancel_result',
+      sourceFlow: traceSource,
+      moduleId: logModuleId,
+      entityId: finalEntityId,
+      notificationId: notificationId,
     );
   }
 
@@ -827,13 +930,65 @@ class NotificationHub {
     return true;
   }
 
-  Future<bool> handleNotificationTap(String payload) async {
+  Future<bool> handleNotificationTap(
+    String payload, {
+    int? notificationId,
+  }) async {
     final parsed = NotificationHubPayload.tryParse(payload);
     if (parsed == null) {
       return false;
     }
 
     await initialize();
+
+    final policy = await NotificationModulePolicy.read(parsed.moduleId);
+    if (!policy.enabled) {
+      await _logStore.append(
+        NotificationLogEntry.create(
+          moduleId: parsed.moduleId,
+          entityId: parsed.entityId,
+          notificationId: notificationId,
+          payload: payload,
+          event: NotificationLifecycleEvent.failed,
+          metadata: <String, dynamic>{
+            'reason': 'module_policy_blocked_tap',
+            'policyReason': policy.reason,
+          },
+        ),
+      );
+      NotificationFlowTrace.log(
+        event: 'hub_tap_blocked',
+        sourceFlow: 'notification_tap',
+        moduleId: parsed.moduleId,
+        entityId: parsed.entityId,
+        reason: policy.reason,
+        notificationId: notificationId,
+      );
+      return false;
+    }
+
+    final exists = await _entityStillExists(parsed.moduleId, parsed.entityId);
+    if (!exists) {
+      await _logStore.append(
+        NotificationLogEntry.create(
+          moduleId: parsed.moduleId,
+          entityId: parsed.entityId,
+          notificationId: notificationId,
+          payload: payload,
+          event: NotificationLifecycleEvent.failed,
+          metadata: const <String, dynamic>{'reason': 'entity_missing_for_tap'},
+        ),
+      );
+      NotificationFlowTrace.log(
+        event: 'hub_tap_blocked',
+        sourceFlow: 'notification_tap',
+        moduleId: parsed.moduleId,
+        entityId: parsed.entityId,
+        reason: 'entity_missing',
+        notificationId: notificationId,
+      );
+      return false;
+    }
 
     final adapter = await _waitForAdapter(parsed.moduleId);
     if (adapter == null) {
@@ -897,6 +1052,59 @@ class NotificationHub {
     }
 
     await initialize();
+
+    final policy = await NotificationModulePolicy.read(parsed.moduleId);
+    if (!policy.enabled) {
+      await _logStore.append(
+        NotificationLogEntry.create(
+          moduleId: parsed.moduleId,
+          entityId: parsed.entityId,
+          notificationId: notificationId,
+          payload: payload,
+          actionId: actionId,
+          event: NotificationLifecycleEvent.failed,
+          metadata: <String, dynamic>{
+            'reason': 'module_policy_blocked_action',
+            'policyReason': policy.reason,
+          },
+        ),
+      );
+      NotificationFlowTrace.log(
+        event: 'hub_action_blocked',
+        sourceFlow: 'notification_action',
+        moduleId: parsed.moduleId,
+        entityId: parsed.entityId,
+        reason: policy.reason,
+        notificationId: notificationId,
+      );
+      return false;
+    }
+
+    final exists = await _entityStillExists(parsed.moduleId, parsed.entityId);
+    if (!exists) {
+      await _logStore.append(
+        NotificationLogEntry.create(
+          moduleId: parsed.moduleId,
+          entityId: parsed.entityId,
+          notificationId: notificationId,
+          payload: payload,
+          actionId: actionId,
+          event: NotificationLifecycleEvent.failed,
+          metadata: const <String, dynamic>{
+            'reason': 'entity_missing_for_action',
+          },
+        ),
+      );
+      NotificationFlowTrace.log(
+        event: 'hub_action_blocked',
+        sourceFlow: 'notification_action',
+        moduleId: parsed.moduleId,
+        entityId: parsed.entityId,
+        reason: 'entity_missing',
+        notificationId: notificationId,
+      );
+      return false;
+    }
 
     final adapter = await _waitForAdapter(parsed.moduleId);
     if (adapter == null) {
@@ -987,6 +1195,17 @@ class NotificationHub {
       );
       return false;
     }
+  }
+
+  Future<bool> _entityStillExists(String moduleId, String entityId) async {
+    if (entityId.isEmpty) return false;
+    if (moduleId == NotificationHubModuleIds.task) {
+      return (await TaskRepository().getTaskById(entityId)) != null;
+    }
+    if (moduleId == NotificationHubModuleIds.habit) {
+      return (await HabitRepository().getHabitById(entityId)) != null;
+    }
+    return true;
   }
 
   Future<List<NotificationLogEntry>> getHistory({

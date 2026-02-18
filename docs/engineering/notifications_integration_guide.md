@@ -13,6 +13,17 @@ Add module notifications through one robust path:
 - safe tap/action handling
 - delete cleanup with no resurrection
 
+## Quick Start
+
+If you are integrating a new module quickly, do this first:
+
+1. Reserve a module ID + non-overlapping ID range in `notification_hub_modules.dart`.
+2. Implement a `MiniAppNotificationAdapter` for the module.
+3. Register the adapter in `<module>_module.dart`.
+4. Persist reminder rules in universal storage (not a new legacy path).
+5. Trigger `NotificationSystemRefresher.instance.resyncAll(...)` after create/edit/delete.
+6. Run the mandatory validation checklist before merge.
+
 ## High-Level Architecture
 
 Text flow:
@@ -49,6 +60,14 @@ module delete hook -> Hub cancel + universal definition delete
                   -> recovery sees nothing to restore
 ```
 
+## Rules vs Instances
+
+- Rule: persistent user intent (for example recurrence, message, action type, entity binding).
+- Instance: concrete scheduled fire at a specific time with a deterministic notification ID.
+- Scheduler responsibility: derive upcoming instances from rules for the active horizon window.
+- Recovery responsibility: rebuild missing instances from rules, never from stale pending state.
+- Delete responsibility: remove rules and cancel all derived instances for that entity.
+
 ## Golden Rules (Must Not Break)
 
 1. Hub policy is authoritative.
@@ -57,7 +76,17 @@ module delete hook -> Hub cancel + universal definition delete
 4. Scheduling must be idempotent: cancel-then-schedule for the same logical reminder.
 5. Delete cleanup must remove OS pending entries and stored definitions, so recovery cannot resurrect deleted entities.
 6. Quiet hours must be enforced in the shared scheduling pipeline, not in module-specific duplicated logic.
+   - Standard rule: if a reminder does not bypass quiet hours, defer it to the next allowed time outside the quiet window.
 7. Tap/action handlers must validate current state (entity exists, module enabled) before mutating data.
+
+## Don't-Do-This (Common Mistakes)
+
+- Do not call scheduling plugins directly from feature/module UI code.
+- Do not generate notification IDs from random/time-based values.
+- Do not keep separate module-enable flags that can drift from Hub policy.
+- Do not schedule without cancel-then-schedule idempotent behavior.
+- Do not execute tap/action mutations without re-validating entity existence and module policy.
+- Do not leave legacy reminder state after entity deletion.
 
 ## Step-by-Step: Add Notifications to a New Mini App
 
@@ -159,16 +188,23 @@ Run this before merging any new module notification integration:
 3. Disable module in Hub, resync, verify no schedules/actions are applied for that module.
 4. Block notifications/exact alarms in system settings, verify Hub shows a visible delivery warning.
 5. Re-enable permissions and verify warning clears after refresh and scheduling resumes.
-6. Verify deterministic IDs stay in the module range for all generated reminders.
-7. Verify tap/action for stale/deleted entities is safely rejected.
-8. Verify reboot/update/resume recovery does not create duplicates.
+6. Set quiet hours to include a reminder fire time, resync, and verify delivery is deferred/skipped according to quiet-hours policy (no fire inside quiet window).
+7. Verify deterministic IDs stay in the module range for all generated reminders.
+8. Verify tap/action for stale/deleted entities is safely rejected.
+9. Verify reboot/update/resume recovery does not create duplicates.
 
 Notes:
 
 - If a debug smoke screen exists in your development branch, run it.
 - If debug smoke UI is not present, execute equivalent manual/automated scenarios above.
 
+## Debugging (Tiny)
+
+- Check Hub warning surfaces first: blocked permission, exact alarm restriction, or module policy off.
+- Inspect failed notifications in `hub_failed_notifications_page.dart` for the latest failure reason.
+- For one entity, run create -> edit -> resync -> delete -> resync and confirm pending count returns to baseline.
+- In logs, verify `sourceFlow`, `reason`, `cancelledIds`, `scheduledIds`, and `skipped` counts are coherent.
+
 ## Definition of Done
 
 A new developer can add notifications for a new mini app using this guide only, without tribal knowledge, and without bypassing Hub/universal scheduling paths.
-

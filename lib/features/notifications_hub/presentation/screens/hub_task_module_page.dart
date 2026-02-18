@@ -3,8 +3,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../core/notifications/notifications.dart';
+import '../../../../core/models/notification_settings.dart';
 import '../../../tasks/presentation/screens/settings/notification_settings_screen.dart';
 import '../../../../core/services/alarm_service.dart';
 import '../../../../core/notifications/services/notification_recovery_service.dart';
@@ -38,6 +40,7 @@ class _HubTaskModulePageState extends State<HubTaskModulePage>
   int _scheduledRefreshKey = 0;
 
   static const _taskColor = Colors.blue;
+  static const _legacyNotificationSettingsKey = 'notification_settings';
 
   @override
   void initState() {
@@ -68,7 +71,24 @@ class _HubTaskModulePageState extends State<HubTaskModulePage>
 
   Future<void> _saveSettings(HubModuleNotificationSettings settings) async {
     await _hub.setModuleSettings(NotificationHubModuleIds.task, settings);
+    await _syncLegacyTaskToggle(settings.notificationsEnabled);
     setState(() => _settings = settings);
+  }
+
+  Future<void> _syncLegacyTaskToggle(bool? enabled) async {
+    if (enabled == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_legacyNotificationSettingsKey);
+    final current = raw == null
+        ? NotificationSettings.defaults
+        : NotificationSettings.fromJsonString(raw);
+    final updated = current.copyWith(notificationsEnabled: enabled);
+    await prefs.setString(_legacyNotificationSettingsKey, updated.toJsonString());
+    try {
+      await NotificationService().reloadSettings();
+    } catch (_) {
+      // Best-effort sync with legacy task settings screen.
+    }
   }
 
   Future<void> _syncNotifications() async {
@@ -77,6 +97,7 @@ class _HubTaskModulePageState extends State<HubTaskModulePage>
     try {
       final result = await NotificationRecoveryService.runRecovery(
         bootstrapForBackground: false,
+        sourceFlow: 'hub_task_manual_sync',
       );
 
       if (mounted) {

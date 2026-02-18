@@ -1,10 +1,13 @@
 import 'dart:async';
 
 import '../../../../core/data/history_optimization_models.dart';
+import '../../../../core/utils/perf_trace.dart';
 import '../../../../data/repositories/task_repository.dart';
 import '../../../finance/data/repositories/transaction_repository.dart';
 import '../../../habits/data/repositories/habit_repository.dart';
+import '../../../mbt/data/repositories/mood_repository.dart';
 import '../../../sleep/data/repositories/sleep_record_repository.dart';
+import '../../../behavior/data/repositories/behavior_repository.dart';
 
 /// Coordinates phased history optimization:
 /// - bootstrap window is prepared by each repository during first access
@@ -19,6 +22,8 @@ class HistoryOptimizationService {
   final HabitRepository _habitRepository = HabitRepository();
   final SleepRecordRepository _sleepRepository = SleepRecordRepository();
   final TransactionRepository _financeRepository = TransactionRepository();
+  final MoodRepository _moodRepository = MoodRepository();
+  final BehaviorRepository _behaviorRepository = BehaviorRepository();
 
   final StreamController<HistoryOptimizationStatus> _statusController =
       StreamController<HistoryOptimizationStatus>.broadcast();
@@ -34,12 +39,17 @@ class HistoryOptimizationService {
     final sleepStatus = await _sleepRepository.getHistoryOptimizationStatus();
     final financeStatus = await _financeRepository
         .getHistoryOptimizationStatus();
+    final moodStatus = await _moodRepository.getHistoryOptimizationStatus();
+    final behaviorStatus = await _behaviorRepository
+        .getHistoryOptimizationStatus();
     return HistoryOptimizationStatus(
       modules: <ModuleHistoryOptimizationStatus>[
         taskStatus,
         habitStatus,
         sleepStatus,
         financeStatus,
+        moodStatus,
+        behaviorStatus,
       ],
     );
   }
@@ -57,6 +67,8 @@ class HistoryOptimizationService {
       _habitRepository.setBackfillPaused(paused),
       _sleepRepository.setBackfillPaused(paused),
       _financeRepository.setBackfillPaused(paused),
+      _moodRepository.setBackfillPaused(paused),
+      _behaviorRepository.setBackfillPaused(paused),
     ]);
     await refreshStatus();
   }
@@ -66,9 +78,14 @@ class HistoryOptimizationService {
     Duration interChunkDelay = const Duration(milliseconds: 180),
   }) async {
     if (_sessionRunning) return;
+    final trace = PerfTrace('HistoryOptimization.runSessionBackfill');
     _sessionRunning = true;
     try {
       await refreshStatus();
+      trace.step(
+        'status_refreshed',
+        details: {'maxChunksPerSession': maxChunksPerSession},
+      );
 
       var processedChunks = 0;
       while (processedChunks < maxChunksPerSession) {
@@ -77,6 +94,10 @@ class HistoryOptimizationService {
         if (await _taskRepository.backfillNextChunk()) {
           progressed = true;
           processedChunks++;
+          trace.step(
+            'chunk_processed',
+            details: {'module': 'tasks', 'processedChunks': processedChunks},
+          );
           await refreshStatus();
           await Future<void>.delayed(interChunkDelay);
           if (processedChunks >= maxChunksPerSession) break;
@@ -85,6 +106,10 @@ class HistoryOptimizationService {
         if (await _habitRepository.backfillNextChunk()) {
           progressed = true;
           processedChunks++;
+          trace.step(
+            'chunk_processed',
+            details: {'module': 'habits', 'processedChunks': processedChunks},
+          );
           await refreshStatus();
           await Future<void>.delayed(interChunkDelay);
           if (processedChunks >= maxChunksPerSession) break;
@@ -93,6 +118,10 @@ class HistoryOptimizationService {
         if (await _sleepRepository.backfillNextChunk()) {
           progressed = true;
           processedChunks++;
+          trace.step(
+            'chunk_processed',
+            details: {'module': 'sleep', 'processedChunks': processedChunks},
+          );
           await refreshStatus();
           await Future<void>.delayed(interChunkDelay);
           if (processedChunks >= maxChunksPerSession) break;
@@ -101,18 +130,51 @@ class HistoryOptimizationService {
         if (await _financeRepository.backfillNextChunk()) {
           progressed = true;
           processedChunks++;
+          trace.step(
+            'chunk_processed',
+            details: {'module': 'finance', 'processedChunks': processedChunks},
+          );
+          await refreshStatus();
+          await Future<void>.delayed(interChunkDelay);
+          if (processedChunks >= maxChunksPerSession) break;
+        }
+
+        if (await _moodRepository.backfillNextChunk()) {
+          progressed = true;
+          processedChunks++;
+          trace.step(
+            'chunk_processed',
+            details: {'module': 'mbt_mood', 'processedChunks': processedChunks},
+          );
+          await refreshStatus();
+          await Future<void>.delayed(interChunkDelay);
+          if (processedChunks >= maxChunksPerSession) break;
+        }
+
+        if (await _behaviorRepository.backfillNextChunk()) {
+          progressed = true;
+          processedChunks++;
+          trace.step(
+            'chunk_processed',
+            details: {
+              'module': 'behavior_tracker',
+              'processedChunks': processedChunks,
+            },
+          );
           await refreshStatus();
           await Future<void>.delayed(interChunkDelay);
           if (processedChunks >= maxChunksPerSession) break;
         }
 
         if (!progressed) {
+          trace.step('no_more_progress');
           break;
         }
       }
     } finally {
       _sessionRunning = false;
       await refreshStatus();
+      trace.end('done');
     }
   }
 

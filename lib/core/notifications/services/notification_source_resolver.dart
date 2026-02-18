@@ -19,11 +19,11 @@ class ResolvedNotificationSource {
 /// Resolves notification source (module, section, entity) from a notification ID.
 ///
 /// Used when a log entry has moduleId 'unknown' (e.g. legacy cancellations,
-/// payload parse failure). Tries ID ranges first, then scans Universal repo
-/// for hashCode-based IDs (Task/Habit/Sleep wind-down Universal reminders).
+/// payload parse failure). Tries Universal definitions first, then falls back
+/// to range-based module inference.
 class NotificationSourceResolver {
   NotificationSourceResolver({UniversalNotificationRepository? repo})
-      : _repo = repo ?? UniversalNotificationRepository();
+    : _repo = repo ?? UniversalNotificationRepository();
 
   final UniversalNotificationRepository _repo;
 
@@ -45,30 +45,35 @@ class NotificationSourceResolver {
         notificationId <= NotificationHubIdRanges.sleepEnd) {
       return NotificationHubModuleIds.sleep;
     }
+    if (notificationId >= NotificationHubIdRanges.mbtMoodStart &&
+        notificationId <= NotificationHubIdRanges.mbtMoodEnd) {
+      return NotificationHubModuleIds.mbtMood;
+    }
+    if (notificationId >= NotificationHubIdRanges.behaviorStart &&
+        notificationId <= NotificationHubIdRanges.behaviorEnd) {
+      return NotificationHubModuleIds.behavior;
+    }
     return null;
   }
 
   /// Resolve source from notification ID. Returns null if not found.
   ///
-  /// 1. Check ID ranges (task 1–99999, habit 100k–199k, finance 200k–299k,
-  ///    sleep 300k–309k).
-  /// 2. For other IDs (Universal hashCode-based), scan
-  ///    [UniversalNotificationRepository] for matching hashCode.
+  /// 1. Scan Universal definitions (supports both old and new ID strategies).
+  /// 2. Fallback to module range inference.
   Future<ResolvedNotificationSource?> resolve(int notificationId) async {
-    final rangeModule = moduleIdFromRange(notificationId);
-    if (rangeModule != null) {
-      return ResolvedNotificationSource(
-        moduleId: rangeModule,
-        section: '',
-        entityId: '',
-      );
-    }
-
     await _repo.init();
     final all = await _repo.getAll();
     for (final n in all) {
-      final hash = n.id.hashCode & 0x7FFFFFFF;
-      if (hash == notificationId) {
+      final legacyHash = n.id.hashCode & 0x7FFFFFFF;
+      final stableHash = _stableUniversalNotificationId(
+        moduleId: n.moduleId,
+        entityId: n.entityId,
+        universalId: n.id,
+        reminderType: n.timing,
+        reminderValue: n.timingValue,
+        reminderUnit: n.timingUnit,
+      );
+      if (legacyHash == notificationId || stableHash == notificationId) {
         return ResolvedNotificationSource(
           moduleId: n.moduleId,
           section: n.section,
@@ -76,6 +81,15 @@ class NotificationSourceResolver {
           entityName: n.entityName.isNotEmpty ? n.entityName : null,
         );
       }
+    }
+
+    final rangeModule = moduleIdFromRange(notificationId);
+    if (rangeModule != null) {
+      return ResolvedNotificationSource(
+        moduleId: rangeModule,
+        section: '',
+        entityId: '',
+      );
     }
     return null;
   }
@@ -87,5 +101,64 @@ class NotificationSourceResolver {
       parts.add('section:${r.section}');
     }
     return parts.join('|');
+  }
+
+  static int _stableUniversalNotificationId({
+    required String moduleId,
+    required String entityId,
+    required String universalId,
+    required String reminderType,
+    required int reminderValue,
+    required String reminderUnit,
+  }) {
+    final signature = [
+      moduleId,
+      '$entityId|$universalId',
+      reminderType,
+      '$reminderValue',
+      reminderUnit,
+    ].join('|');
+    final hash = signature.hashCode.abs();
+
+    final int rangeStart;
+    final int rangeSize;
+    if (moduleId == NotificationHubModuleIds.habit) {
+      rangeStart = NotificationHubIdRanges.habitStart;
+      rangeSize =
+          NotificationHubIdRanges.habitEnd -
+          NotificationHubIdRanges.habitStart +
+          1;
+    } else if (moduleId == NotificationHubModuleIds.finance) {
+      rangeStart = NotificationHubIdRanges.financeStart;
+      rangeSize =
+          NotificationHubIdRanges.financeEnd -
+          NotificationHubIdRanges.financeStart +
+          1;
+    } else if (moduleId == NotificationHubModuleIds.sleep) {
+      rangeStart = NotificationHubIdRanges.sleepStart;
+      rangeSize =
+          NotificationHubIdRanges.sleepEnd -
+          NotificationHubIdRanges.sleepStart +
+          1;
+    } else if (moduleId == NotificationHubModuleIds.mbtMood) {
+      rangeStart = NotificationHubIdRanges.mbtMoodStart;
+      rangeSize =
+          NotificationHubIdRanges.mbtMoodEnd -
+          NotificationHubIdRanges.mbtMoodStart +
+          1;
+    } else if (moduleId == NotificationHubModuleIds.behavior) {
+      rangeStart = NotificationHubIdRanges.behaviorStart;
+      rangeSize =
+          NotificationHubIdRanges.behaviorEnd -
+          NotificationHubIdRanges.behaviorStart +
+          1;
+    } else {
+      rangeStart = NotificationHubIdRanges.taskStart;
+      rangeSize =
+          NotificationHubIdRanges.taskEnd -
+          NotificationHubIdRanges.taskStart +
+          1;
+    }
+    return rangeStart + (hash % rangeSize);
   }
 }

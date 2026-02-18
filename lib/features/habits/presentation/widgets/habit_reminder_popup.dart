@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/color_schemes.dart';
 import '../../../../core/services/notification_service.dart';
+import '../../../../core/services/reminder_manager.dart';
 import '../../../../core/models/notification_settings.dart';
 import '../../../../routing/app_router.dart';
 import '../../data/models/habit.dart';
@@ -505,7 +506,7 @@ class _HabitReminderPopupState extends ConsumerState<HabitReminderPopup>
     try {
       await ref.read(habitNotifierProvider.notifier)
           .completeHabitForDate(widget.habit.id, DateTime.now());
-      await NotificationService().cancelAllHabitReminders(widget.habit.id);
+      await ReminderManager().cancelRemindersForHabit(widget.habit.id);
 
       if (mounted) {
         Navigator.pop(context);
@@ -595,7 +596,7 @@ class _HabitReminderPopupState extends ConsumerState<HabitReminderPopup>
       try {
         await ref.read(habitNotifierProvider.notifier)
             .skipHabitForDate(widget.habit.id, DateTime.now(), reason: reason);
-        await NotificationService().cancelAllHabitReminders(widget.habit.id);
+        await ReminderManager().cancelRemindersForHabit(widget.habit.id);
         
         if (mounted) {
           Navigator.pop(context);

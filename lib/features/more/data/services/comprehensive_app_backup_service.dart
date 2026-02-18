@@ -684,6 +684,11 @@ class ComprehensiveAppBackupService {
   static const String _backupFormat = 'life_manager_comprehensive_backup';
   static const int _backupVersion = 1;
   static const String _backupFileExtension = 'lmbk';
+  static const String _hubModuleEnabledStatesKey =
+      'notification_hub_module_settings_v1';
+  static const String _hubModuleSettingsKeyPrefix =
+      'notification_hub_module_settings_';
+  static const String _hubFinanceModuleId = 'finance';
 
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
 
@@ -1137,7 +1142,7 @@ class ComprehensiveAppBackupService {
       }
 
       final value = prefs.get(key);
-      final encoded = _encodePreferenceValue(value);
+      final encoded = _encodePreferenceValueForBackup(key, value);
       if (encoded == null) {
         continue;
       }
@@ -1175,6 +1180,7 @@ class ComprehensiveAppBackupService {
     List<Map<String, dynamic>> entries,
   ) async {
     final prefs = await SharedPreferences.getInstance();
+    final preservedFinanceHubEnabledState = _readFinanceHubEnabledState(prefs);
     final existingKeys = prefs.getKeys();
     for (final key in existingKeys) {
       if (_isFinancePreferenceKey(key)) {
@@ -1183,6 +1189,7 @@ class ComprehensiveAppBackupService {
       await prefs.remove(key);
     }
 
+    var restoredHubEnabledStates = false;
     for (final entry in entries) {
       final key = entry['key'] as String?;
       final type = entry['type'] as String?;
@@ -1205,7 +1212,16 @@ class ComprehensiveAppBackupService {
           break;
         case 'string':
           if (value is String) {
-            await prefs.setString(key, value);
+            if (key == _hubModuleEnabledStatesKey) {
+              final merged = mergeHubEnabledStatesJsonWithPreservedFinance(
+                value,
+                preservedFinanceHubEnabledState,
+              );
+              await prefs.setString(key, merged);
+              restoredHubEnabledStates = true;
+            } else {
+              await prefs.setString(key, value);
+            }
           }
           break;
         case 'stringList':
@@ -1219,6 +1235,15 @@ class ComprehensiveAppBackupService {
         default:
           break;
       }
+    }
+
+    if (!restoredHubEnabledStates && preservedFinanceHubEnabledState != null) {
+      await prefs.setString(
+        _hubModuleEnabledStatesKey,
+        jsonEncode(<String, dynamic>{
+          _hubFinanceModuleId: preservedFinanceHubEnabledState,
+        }),
+      );
     }
   }
 
@@ -1266,6 +1291,19 @@ class ComprehensiveAppBackupService {
     return null;
   }
 
+  Map<String, dynamic>? _encodePreferenceValueForBackup(
+    String key,
+    Object? value,
+  ) {
+    if (key == _hubModuleEnabledStatesKey && value is String) {
+      return <String, dynamic>{
+        'type': 'string',
+        'value': sanitizeHubEnabledStatesJsonForBackup(value),
+      };
+    }
+    return _encodePreferenceValue(value);
+  }
+
   String _buildBackupFilename(DateTime now) {
     final yyyy = now.year.toString().padLeft(4, '0');
     final mm = now.month.toString().padLeft(2, '0');
@@ -1295,12 +1333,13 @@ class ComprehensiveAppBackupService {
     return isFinanceHiveBoxName(boxName);
   }
 
-  bool _isFinanceHiveBox(String boxName) {
-    return isFinanceHiveBoxName(boxName);
-  }
-
-  bool _isFinancePreferenceKey(String key) {
+  @visibleForTesting
+  static bool isFinancePreferenceKeyName(String key) {
     if (_financePreferenceExactKeys.contains(key)) {
+      return true;
+    }
+    if (key.startsWith(_hubModuleSettingsKeyPrefix) &&
+        key.endsWith('_$_hubFinanceModuleId')) {
       return true;
     }
     if (key.startsWith('finance_')) {
@@ -1309,8 +1348,75 @@ class ComprehensiveAppBackupService {
     return false;
   }
 
-  bool _isFinanceSecureStorageKey(String key) {
+  @visibleForTesting
+  static bool isFinanceSecureStorageKeyName(String key) {
     return key.startsWith('finance_');
+  }
+
+  bool _isFinanceHiveBox(String boxName) {
+    return isFinanceHiveBoxName(boxName);
+  }
+
+  bool _isFinancePreferenceKey(String key) {
+    return isFinancePreferenceKeyName(key);
+  }
+
+  bool _isFinanceSecureStorageKey(String key) {
+    return isFinanceSecureStorageKeyName(key);
+  }
+
+  bool? _readFinanceHubEnabledState(SharedPreferences prefs) {
+    final raw = (prefs.getString(_hubModuleEnabledStatesKey) ?? '').trim();
+    if (raw.isEmpty) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) {
+        return null;
+      }
+      final map = Map<String, dynamic>.from(decoded);
+      final value = map[_hubFinanceModuleId];
+      return value is bool ? value : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @visibleForTesting
+  static String sanitizeHubEnabledStatesJsonForBackup(String rawJson) {
+    try {
+      final decoded = jsonDecode(rawJson);
+      if (decoded is! Map) {
+        return rawJson;
+      }
+      final map = Map<String, dynamic>.from(decoded);
+      map.remove(_hubFinanceModuleId);
+      return jsonEncode(map);
+    } catch (_) {
+      return rawJson;
+    }
+  }
+
+  @visibleForTesting
+  static String mergeHubEnabledStatesJsonWithPreservedFinance(
+    String restoredJson,
+    bool? financeEnabled,
+  ) {
+    if (financeEnabled == null) {
+      return restoredJson;
+    }
+
+    try {
+      final decoded = jsonDecode(restoredJson);
+      final map = decoded is Map<String, dynamic>
+          ? Map<String, dynamic>.from(decoded)
+          : <String, dynamic>{};
+      map[_hubFinanceModuleId] = financeEnabled;
+      return jsonEncode(map);
+    } catch (_) {
+      return jsonEncode(<String, dynamic>{_hubFinanceModuleId: financeEnabled});
+    }
   }
 
   List<Map<String, dynamic>> _asMapList(Object? value) {

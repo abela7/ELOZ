@@ -23,7 +23,32 @@ class HubGlobalSettingsPage extends ConsumerStatefulWidget {
       _HubGlobalSettingsPageState();
 }
 
-class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage> {
+class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(notificationSettingsProvider.notifier).refreshPermissionStates();
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      ref.read(notificationSettingsProvider.notifier).refreshPermissionStates();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(notificationSettingsProvider);
@@ -51,6 +76,8 @@ class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage> {
                 color: AppColorSchemes.primaryGold,
                 onChanged: (v) => notifier.setNotificationsEnabled(v),
               ),
+              _buildDivider(isDark),
+              _buildPermissionStatusLine(settings, notifier),
             ],
           ),
         ),
@@ -74,7 +101,9 @@ class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage> {
                 _buildDivider(isDark),
                 SettingsTile(
                   title: 'Default Sound',
-                  value: NotificationSettings.getSoundDisplayName(settings.defaultSound),
+                  value: NotificationSettings.getSoundDisplayName(
+                    settings.defaultSound,
+                  ),
                   icon: Icons.graphic_eq_rounded,
                   color: colorScheme.secondary,
                   onTap: () async {
@@ -102,7 +131,9 @@ class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage> {
                 _buildDivider(isDark),
                 SettingsTile(
                   title: 'Vibration Pattern',
-                  value: NotificationSettings.getVibrationDisplayName(settings.defaultVibrationPattern),
+                  value: NotificationSettings.getVibrationDisplayName(
+                    settings.defaultVibrationPattern,
+                  ),
                   icon: Icons.waves_rounded,
                   color: AppColorSchemes.success,
                   onTap: () async {
@@ -262,11 +293,10 @@ class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage> {
                   'optimization for this app. Some devices (Xiaomi, Samsung, '
                   'Huawei) need extra steps – search "dontkillmyapp" for guides.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withOpacity(0.7),
-                      ),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.7),
+                  ),
                 ),
               ),
               _buildDivider(isDark),
@@ -275,8 +305,7 @@ class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage> {
                 value: 'Tap to open',
                 icon: Icons.battery_charging_full_rounded,
                 color: AppColorSchemes.success,
-                onTap: () =>
-                    AndroidSystemStatus.openAppDetailsSettings(),
+                onTap: () => AndroidSystemStatus.openAppDetailsSettings(),
               ),
             ],
           ),
@@ -286,12 +315,62 @@ class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage> {
     );
   }
 
+  Widget _buildPermissionStatusLine(
+    NotificationSettings settings,
+    NotificationSettingsNotifier notifier,
+  ) {
+    final hasPermission = settings.hasNotificationPermission;
+    final statusColor = hasPermission ? AppColorSchemes.success : Colors.red;
+    final statusText = hasPermission ? 'Allowed' : 'Blocked';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.shield_rounded, size: 18, color: statusColor),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Notifications permission',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Text(
+                statusText,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: statusColor,
+                ),
+              ),
+            ],
+          ),
+          if (!hasPermission) ...[
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () async {
+                await notifier.openNotificationSettings();
+                await notifier.refreshPermissionStates();
+              },
+              icon: const Icon(Icons.open_in_new_rounded, size: 18),
+              label: const Text('Open notification settings'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildDivider(bool isDark) {
     return Divider(
       height: 1,
       thickness: 1,
       indent: 56,
-      color: AppColorSchemes.textSecondary.withOpacity(isDark ? 0.2 : 0.1),
+      color: AppColorSchemes.textSecondary.withValues(
+        alpha: isDark ? 0.2 : 0.1,
+      ),
     );
   }
 
@@ -322,16 +401,20 @@ class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage> {
                   Text(
                     'Select Audio Stream',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 16),
                   ...streams.map((s) {
                     final selected = s == settings.notificationAudioStream;
                     return ListTile(
                       leading: Icon(
-                        selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                        color: selected ? Theme.of(context).colorScheme.primary : null,
+                        selected
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_unchecked,
+                        color: selected
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
                       ),
                       title: Text(_displayName(s)),
                       onTap: () {
@@ -375,16 +458,20 @@ class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage> {
                   Text(
                     'Default Snooze Duration',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 16),
                   ...options.map((m) {
                     final selected = m == settings.defaultSnoozeDuration;
                     return ListTile(
                       leading: Icon(
-                        selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                        color: selected ? Theme.of(context).colorScheme.primary : null,
+                        selected
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_unchecked,
+                        color: selected
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
                       ),
                       title: Text('$m minutes'),
                       onTap: () {
@@ -428,16 +515,20 @@ class _HubGlobalSettingsPageState extends ConsumerState<HubGlobalSettingsPage> {
                   Text(
                     'Max Snooze Count',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 16),
                   ...options.map((m) {
                     final selected = m == settings.maxSnoozeCount;
                     return ListTile(
                       leading: Icon(
-                        selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                        color: selected ? Theme.of(context).colorScheme.primary : null,
+                        selected
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_unchecked,
+                        color: selected
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
                       ),
                       title: Text('$m times'),
                       onTap: () {

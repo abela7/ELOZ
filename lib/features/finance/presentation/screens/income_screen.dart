@@ -2056,15 +2056,25 @@ class _IncomeScreenState extends ConsumerState<IncomeScreen> {
 
     try {
       final repo = ref.read(transactionRepositoryProvider);
+      final balanceService = ref.read(transactionBalanceServiceProvider);
       await repo.createTransaction(transaction);
 
-      // Add to account balance
-      defaultAccount.balance += amount;
-      await accountRepo.updateAccount(defaultAccount);
+      // Apply transaction impact to account balance (canonical path)
+      await balanceService.applyTransactionImpact(transaction);
 
-      // Invalidate all relevant providers
+      // Invalidate daily balance cache from today onward
+      final dailyBalanceService = ref.read(dailyBalanceServiceProvider);
+      final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+      await dailyBalanceService.invalidateFromDate(today);
+
+      // Normalize today for provider invalidation
+      final normalizedToday = DateTime(today.year, today.month, today.day);
+
+      // Invalidate all relevant providers so dashboard, history, balance update
       ref.invalidate(allTransactionsProvider);
+      ref.invalidate(transactionsForDateProvider(normalizedToday));
       ref.invalidate(totalBalanceProvider);
+      ref.invalidate(dailyTotalBalanceProvider(normalizedToday));
       ref.invalidate(monthlyStatisticsProvider);
       ref.invalidate(defaultAccountProvider);
       ref.invalidate(allAccountsProvider);

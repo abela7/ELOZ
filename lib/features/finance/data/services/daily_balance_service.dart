@@ -16,19 +16,32 @@ class DailyBalanceService {
     this._dailyBalanceRepository,
   );
 
-  /// Get total balance by currency for a specific date
-  /// Results are cached per day for fast future access
+  /// Get total balance by currency for a specific date.
+  /// Uses bank-style closing balance: initial balances + all transactions
+  /// up to end of that day. Results are cached per day except for today
+  /// (which is always recomputed for real-time accuracy).
   Future<Map<String, double>> getTotalBalanceByCurrencyForDate(
     DateTime date,
   ) async {
-    final cached = await _dailyBalanceRepository.getBalanceMapForDate(date);
-    if (cached.isNotEmpty) {
-      return cached;
+    final dateOnly = DateTime(date.year, date.month, date.day);
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
+    final isToday = dateOnly.isAtSameMomentAs(today);
+
+    if (!isToday) {
+      final cached =
+          await _dailyBalanceRepository.getBalanceMapForDate(dateOnly);
+      if (cached.isNotEmpty) {
+        return cached;
+      }
     }
 
-    final computed = await _calculateBalancesForDate(date);
-    if (computed.isNotEmpty) {
-      await _dailyBalanceRepository.saveBalancesForDate(date, computed);
+    final computed = await _calculateBalancesForDate(dateOnly);
+    if (computed.isNotEmpty && !isToday) {
+      await _dailyBalanceRepository.saveBalancesForDate(dateOnly, computed);
     }
 
     return computed;
@@ -61,15 +74,27 @@ class DailyBalanceService {
       for (final account in relevantAccounts) account.id: account,
     };
 
-    // Start with initial balances
+    // Start with initial balances (bank opening balance)
     final Map<String, double> balancesByAccount = {
       for (final account in relevantAccounts)
         account.id: account.initialBalance,
     };
 
-    final transactions = await _transactionRepository.getTransactionsUpToDate(
-      endOfDay,
-    );
+    // Get all transactions up to end of day and sort chronologically
+    // (bank-style processing order: date, then time)
+    final rawTransactions =
+        await _transactionRepository.getTransactionsUpToDate(endOfDay);
+    final transactions = List<Transaction>.from(rawTransactions)
+      ..sort((a, b) {
+        final dateCompare = a.transactionDate.compareTo(b.transactionDate);
+        if (dateCompare != 0) return dateCompare;
+        final hourA = a.transactionTimeHour ?? 0;
+        final hourB = b.transactionTimeHour ?? 0;
+        if (hourA != hourB) return hourA.compareTo(hourB);
+        final minA = a.transactionTimeMinute ?? 0;
+        final minB = b.transactionTimeMinute ?? 0;
+        return minA.compareTo(minB);
+      });
 
     for (final tx in transactions) {
       final amount = tx.amount;

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../../../core/security/encryption_service.dart';
 import 'migration_service.dart';
@@ -76,13 +77,27 @@ class HiveService {
     // Deduplicate concurrent open requests for the same box.
     final existingOpen = _openingBoxes[boxName];
     if (existingOpen != null) {
-      return (await existingOpen) as Box<T>;
+      final waitStopwatch = Stopwatch()..start();
+      final box = (await existingOpen) as Box<T>;
+      if (kDebugMode || kProfileMode) {
+        debugPrint(
+          '[Perf][HiveService.getBox] waited box=$boxName durationMs=${waitStopwatch.elapsedMilliseconds} records=${box.length}',
+        );
+      }
+      return box;
     }
 
+    final stopwatch = Stopwatch()..start();
     final openFuture = _openBox<T>(boxName);
     _openingBoxes[boxName] = openFuture;
     try {
-      return await openFuture as Box<T>;
+      final box = await openFuture as Box<T>;
+      if (kDebugMode || kProfileMode) {
+        debugPrint(
+          '[Perf][HiveService.getBox] opened box=$boxName durationMs=${stopwatch.elapsedMilliseconds} records=${box.length}',
+        );
+      }
+      return box;
     } finally {
       _openingBoxes.remove(boxName);
     }
@@ -106,16 +121,30 @@ class HiveService {
 
     final existingOpen = _openingBoxes[boxName];
     if (existingOpen != null) {
-      return (await existingOpen) as Box<T>;
+      final waitStopwatch = Stopwatch()..start();
+      final box = (await existingOpen) as Box<T>;
+      if (kDebugMode || kProfileMode) {
+        debugPrint(
+          '[Perf][HiveService.getBoxWithCipher] waited box=$boxName durationMs=${waitStopwatch.elapsedMilliseconds} records=${box.length}',
+        );
+      }
+      return box;
     }
 
+    final stopwatch = Stopwatch()..start();
     final openFuture = _openBoxWithCipher<T>(
       boxName: boxName,
       cipherKeyBytes: List<int>.from(cipherKeyBytes),
     );
     _openingBoxes[boxName] = openFuture;
     try {
-      return await openFuture as Box<T>;
+      final box = await openFuture as Box<T>;
+      if (kDebugMode || kProfileMode) {
+        debugPrint(
+          '[Perf][HiveService.getBoxWithCipher] opened box=$boxName durationMs=${stopwatch.elapsedMilliseconds} records=${box.length}',
+        );
+      }
+      return box;
     } finally {
       _openingBoxes.remove(boxName);
     }

@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 import 'core/theme/app_theme.dart';
+import 'core/utils/theme_toggle_profiler.dart';
 import 'routing/app_router.dart';
 import 'data/local/hive/hive_service.dart';
 import 'core/notifications/notification_hub.dart';
@@ -13,7 +15,6 @@ import 'core/notifications/services/notification_recovery_service.dart';
 import 'core/notifications/services/notification_system_refresher.dart';
 import 'core/services/android_system_status.dart';
 import 'core/notifications/services/notification_workmanager_dispatcher.dart';
-import 'core/notifications/services/universal_notification_scheduler.dart';
 import 'core/services/reminder_manager.dart';
 import 'core/services/notification_handler.dart';
 import 'core/services/alarm_service.dart';
@@ -25,10 +26,16 @@ import 'features/more/data/services/history_optimization_service.dart';
 import 'features/tasks/tasks_module.dart';
 import 'features/habits/habits_module.dart';
 import 'features/finance/finance_module.dart';
+import 'features/mbt/mbt_module.dart';
 import 'features/sleep/sleep_module.dart';
+import 'features/behavior/behavior_module.dart';
 
 // Theme mode provider
 final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
+const bool _themeToggleBenchEnabled = bool.fromEnvironment(
+  'THEME_TOGGLE_BENCH',
+  defaultValue: false,
+);
 
 @pragma('vm:entry-point')
 Future<void> homeWidgetBackgroundCallback(Uri? uri) async {
@@ -41,9 +48,7 @@ void main() async {
   HomeWidget.registerInteractivityCallback(homeWidgetBackgroundCallback);
 
   // WorkManager: safety net for notification recovery (nek12 Layer 3)
-  await Workmanager().initialize(
-    notificationWorkmanagerCallbackDispatcher,
-  );
+  await Workmanager().initialize(notificationWorkmanagerCallbackDispatcher);
 
   // Initialize Hive database
   await HiveService.init();
@@ -51,9 +56,8 @@ void main() async {
   // Initialize only the Home-critical module before first frame.
   // Other feature modules are initialized in the background post-frame.
   await TasksModule.init(preOpenBoxes: false);
-  // Future modules:
-  // await MoodModule.init();
-  // await TimeManagementModule.init();
+  await MbtModule.init(preOpenBoxes: false);
+  await BehaviorModule.init(preOpenBoxes: false);
 
   // Initialize alarm service for special task alarms
   await AlarmService().initialize();
@@ -73,6 +77,8 @@ Future<void> _runPostStartupInitialization() async {
     await Future.wait([
       HabitsModule.init(preOpenBoxes: false),
       SleepModule.init(preOpenBoxes: false),
+      MbtModule.init(preOpenBoxes: false),
+      BehaviorModule.init(preOpenBoxes: false),
       FinanceModule.init(
         deferRecurringProcessing: true,
         preOpenBoxes: false,
@@ -80,7 +86,7 @@ Future<void> _runPostStartupInitialization() async {
       ),
     ]);
   } catch (e) {
-    debugPrint('⚠️ Deferred module init failed: $e');
+    debugPrint('Warning: Deferred module init failed: $e');
   }
 
   // Let first frame settle before background startup work.
@@ -91,7 +97,7 @@ Future<void> _runPostStartupInitialization() async {
     final pendingResync =
         await AndroidSystemStatus.getAndClearPendingNotificationResync();
     if (pendingResync && kDebugMode) {
-      debugPrint('NotificationHub: timezone/time changed – will resync');
+      debugPrint('NotificationHub: timezone/time changed - will resync');
     }
 
     // Initialize notification/reminder system in the background
@@ -105,23 +111,17 @@ Future<void> _runPostStartupInitialization() async {
         'Migrated: cancelled $cancelled legacy sleep_reminder notifications',
       );
     }
-    // Sync universal reminders to OS scheduler (background – don't block startup)
-    unawaited(UniversalNotificationScheduler().syncAll());
-
-    // If timezone changed, run full recovery (Finance + Universal)
-    if (pendingResync) {
-      await NotificationRecoveryService.runRecovery(
-        bootstrapForBackground: false,
-      );
-      if (kDebugMode) {
-        debugPrint('NotificationHub: resynced after timezone/time change');
-      }
-    }
+    // Canonical startup resync path.
+    await NotificationSystemRefresher.instance.resyncAll(
+      reason: pendingResync ? 'app_start_timezone_change' : 'app_start',
+      force: pendingResync,
+      debounce: false,
+    );
 
     // Prune orphaned alarms (deleted entities; native storage has no entity check)
     unawaited(NotificationRecoveryService.pruneOrphanedAlarms());
 
-    // nek12 Layer 4: health check – if we expect notifications but OS has 0, resync
+    // nek12 Layer 4: health check - if we expect notifications but OS has 0, resync
     unawaited(NotificationRecoveryService.runHealthCheckIfNeeded());
 
     // Register WorkManager periodic task (every 15 min) to reschedule
@@ -133,7 +133,7 @@ Future<void> _runPostStartupInitialization() async {
       existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
     );
   } catch (e) {
-    debugPrint('⚠️ ReminderManager init failed: $e');
+    debugPrint('Warning: ReminderManager init failed: $e');
   }
 
   // Stagger maintenance so it doesn't compete with launch rendering.
@@ -143,7 +143,7 @@ Future<void> _runPostStartupInitialization() async {
     // Process recurring finance transactions after UI is up
     await FinanceModule.runPostStartupMaintenance();
   } catch (e) {
-    debugPrint('⚠️ Finance maintenance failed: $e');
+    debugPrint('Warning: Finance maintenance failed: $e');
   }
 
   // Phase 2 background optimization session.
@@ -165,15 +165,39 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
     with WidgetsBindingObserver {
   bool _isShowingAlarm = false;
   Timer? _ringingAlarmCheckTimer;
+  ProviderSubscription<ThemeMode>? _themeModeSubscription;
+  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
+      GlobalKey<ScaffoldMessengerState>();
+  static const Duration _themeAnimationDuration = Duration.zero;
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    SchedulerBinding.instance.addTimingsCallback(_onFrameTimings);
+    _themeModeSubscription = ref.listenManual<ThemeMode>(themeModeProvider, (
+      ThemeMode? previous,
+      ThemeMode next,
+    ) {
+      if (previous == null || previous == next) {
+        return;
+      }
+      ThemeToggleProfiler.markProviderObserved(previous: previous, next: next);
+      Future<void>.delayed(const Duration(milliseconds: 420), () {
+        ThemeToggleProfiler.dumpRapidToggleSummary();
+      });
+    }, fireImmediately: false);
     _setupAlarmListener();
     // Defer heavy startup tasks until after first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _runPostFrameStartupTasks();
+      if (_themeToggleBenchEnabled) {
+        unawaited(_runThemeToggleBenchSequence());
+      }
     });
+  }
+
+  void _onFrameTimings(List<FrameTiming> timings) {
+    ThemeToggleProfiler.onFrameTimings(timings);
   }
 
   /// Clear pending notification payloads in debug mode to prevent
@@ -184,9 +208,16 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
       await prefs.remove('pending_notification_payload');
       await prefs.remove('pending_notification_action');
       await prefs.remove('pending_notification_id');
-      debugPrint('🧹 Debug mode: Cleared pending notification payloads');
+      await prefs.remove('flutter.pending_notification_payload');
+      await prefs.remove('flutter.pending_notification_action');
+      await prefs.remove('flutter.pending_notification_id');
+      await prefs.remove('pending_notification_stored_at_ms_v1');
+      await prefs.remove('processed_deferred_notification_signatures_v1');
+      await prefs.remove('last_launch_response_signature_v1');
+      await prefs.remove('last_launch_response_at_ms_v1');
+      debugPrint('Debug mode: Cleared pending notification payloads');
     } catch (e) {
-      debugPrint('⚠️ Failed to clear pending notifications: $e');
+      debugPrint('Warning: Failed to clear pending notifications: $e');
     }
   }
 
@@ -206,9 +237,25 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
     }
   }
 
+  Future<void> _runThemeToggleBenchSequence() async {
+    await Future<void>.delayed(const Duration(seconds: 2));
+    for (var i = 0; i < 10; i++) {
+      final current = ref.read(themeModeProvider);
+      final next = current == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
+      final toggleId = ThemeToggleProfiler.startToggle(from: current, to: next);
+      ThemeToggleProfiler.markProviderWrite(toggleId);
+      ref.read(themeModeProvider.notifier).state = next;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+    ThemeToggleProfiler.dumpRapidToggleSummary();
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    SchedulerBinding.instance.removeTimingsCallback(_onFrameTimings);
+    _themeModeSubscription?.close();
+    _themeModeSubscription = null;
     _ringingAlarmCheckTimer?.cancel();
     _ringingAlarmCheckTimer = null;
     super.dispose();
@@ -218,11 +265,6 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state != AppLifecycleState.resumed) {
-      // Track when app goes to background for debounced notification refresh.
-      if (state == AppLifecycleState.inactive ||
-          state == AppLifecycleState.paused) {
-        NotificationSystemRefresher.instance.onAppPaused();
-      }
       // Lock quit-habit security session whenever app leaves foreground.
       QuitHabitReportAccessGuard.clearAllSessions();
       unawaited(QuitHabitSecureStorageService().lockSession());
@@ -232,7 +274,7 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
       NotificationHandler().processPendingTapIfUnlocked();
       // If an alarm is ringing (e.g., user just unlocked), show the AlarmScreen.
       _checkForRingingAlarms();
-      // Refresh notification schedules if we were backgrounded long enough.
+      // Refresh notification schedules on resume (debounced).
       unawaited(NotificationSystemRefresher.instance.onAppResumed());
       // Run a short optimization session while app is active.
       unawaited(
@@ -295,7 +337,7 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
           final iconData = await AlarmService().getStoredIconData(alarmId);
 
           debugPrint(
-            '🔔 App launched by alarm $alarmId, icon: ${iconData['codePoint']}',
+            'App launched by alarm $alarmId, icon: ${iconData['codePoint']}',
           );
 
           _showAlarmScreen(
@@ -308,12 +350,12 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
           );
         } else {
           // Fallback - show generic alarm screen
-          debugPrint('🔔 Alarm is ringing but no data available');
+          debugPrint('Alarm is ringing but no data available');
           _showAlarmScreen(0, 'Special Task', 'Tap Done when complete');
         }
       }
     } catch (e) {
-      debugPrint('⚠️ Error checking for ringing alarms: $e');
+      debugPrint('Warning: Error checking for ringing alarms: $e');
     }
   }
 
@@ -351,11 +393,11 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
     }
 
     debugPrint(
-      '🔔 Showing AlarmScreen for alarm $alarmId with icon: $iconCodePoint',
+      'Showing AlarmScreen for alarm $alarmId with icon: $iconCodePoint',
     );
 
-    // Clean up title (remove star prefix if present)
-    final cleanTitle = title.replaceFirst('⭐ ', '');
+    // Clean up title (remove any leading symbol prefix if present)
+    final cleanTitle = title.replaceFirst(RegExp(r'^[^A-Za-z0-9]+\s*'), '');
 
     _isShowingAlarm = true;
 
@@ -373,7 +415,7 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
         // Basic dismiss callback - just update our tracking flag
         // The AlarmScreen handles stopping the alarm sound/vibration
         _isShowingAlarm = false;
-        debugPrint('✅ Alarm $alarmId screen closed');
+        debugPrint('Alarm $alarmId screen closed');
       },
     );
   }
@@ -381,15 +423,38 @@ class _LifeManagerAppState extends ConsumerState<LifeManagerApp>
   @override
   Widget build(BuildContext context) {
     final themeMode = ref.watch(themeModeProvider);
+    final toggleId = ThemeToggleProfiler.markAppBuildStart(themeMode);
 
-    return MaterialApp.router(
+    final lightStopwatch = Stopwatch()..start();
+    final lightTheme = AppTheme.light;
+    lightStopwatch.stop();
+
+    final darkStopwatch = Stopwatch()..start();
+    final darkTheme = AppTheme.dark;
+    darkStopwatch.stop();
+
+    ThemeToggleProfiler.markThemeRefsResolved(
+      toggleId,
+      lightThemeResolve: lightStopwatch.elapsed,
+      darkThemeResolve: darkStopwatch.elapsed,
+    );
+
+    final app = MaterialApp.router(
       title: 'Life Manager',
-      theme: AppTheme.lightTheme(),
-      darkTheme: AppTheme.darkTheme(),
+      theme: lightTheme,
+      darkTheme: darkTheme,
       themeMode: themeMode,
+      themeAnimationDuration: _themeAnimationDuration,
       routerConfig: appRouter,
       debugShowCheckedModeBanner: false,
-      scaffoldMessengerKey: GlobalKey<ScaffoldMessengerState>(),
+      scaffoldMessengerKey: _scaffoldMessengerKey,
     );
+
+    ThemeToggleProfiler.markAppBuildDone(
+      toggleId,
+      mode: themeMode,
+      themeAnimationDuration: _themeAnimationDuration,
+    );
+    return app;
   }
 }

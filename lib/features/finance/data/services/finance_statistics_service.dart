@@ -1,5 +1,5 @@
-import '../models/transaction.dart';
 import '../repositories/transaction_repository.dart';
+import '../../../../core/utils/perf_trace.dart';
 
 /// Service for calculating financial statistics and insights
 class FinanceStatisticsService {
@@ -13,10 +13,12 @@ class FinanceStatisticsService {
     required DateTime endDate,
     required String defaultCurrency,
   }) async {
+    final trace = PerfTrace('FinanceStats.getIncomeExpenseStats');
     final transactions = await _transactionRepository.getTransactionsInRange(
       startDate,
       endDate,
     );
+    trace.step('transactions_loaded', details: {'count': transactions.length});
 
     final income = transactions.where(
       (t) => t.isIncome && !t.isBalanceAdjustment,
@@ -38,6 +40,13 @@ class FinanceStatisticsService {
       totalExpenseByCurrency[cur] =
           (totalExpenseByCurrency[cur] ?? 0) + t.amount;
     }
+    trace.step(
+      'grouped',
+      details: {
+        'incomeCurrencies': totalIncomeByCurrency.length,
+        'expenseCurrencies': totalExpenseByCurrency.length,
+      },
+    );
 
     // CRITICAL: Do NOT sum different currencies together - it's mathematically incorrect!
     // Instead, calculate net income per currency and return currency breakdown
@@ -63,7 +72,7 @@ class FinanceStatisticsService {
 
     final netIncome = totalIncome - totalExpense;
 
-    return {
+    final output = {
       'totalIncome': totalIncome,
       'totalExpense': totalExpense,
       'totalIncomeByCurrency': totalIncomeByCurrency,
@@ -73,6 +82,8 @@ class FinanceStatisticsService {
       'expenseCount': expenses.length,
       'savingsRate': totalIncome > 0 ? (netIncome / totalIncome * 100) : 0,
     };
+    trace.end('done');
+    return output;
   }
 
   /// Get spending by category for a date range
@@ -154,15 +165,25 @@ class FinanceStatisticsService {
   Future<Map<String, dynamic>> getMonthlyStatistics({
     required String defaultCurrency,
   }) async {
+    final trace = PerfTrace('FinanceStats.getMonthlyStatistics');
     final now = DateTime.now();
     final startOfMonth = DateTime(now.year, now.month, 1);
     final endOfMonth = DateTime(now.year, now.month + 1, 0);
 
-    return await getIncomeExpenseStats(
+    trace.step(
+      'range_ready',
+      details: {
+        'start': startOfMonth.toIso8601String().split('T').first,
+        'end': endOfMonth.toIso8601String().split('T').first,
+      },
+    );
+    final stats = await getIncomeExpenseStats(
       startDate: startOfMonth,
       endDate: endOfMonth,
       defaultCurrency: defaultCurrency,
     );
+    trace.end('done');
+    return stats;
   }
 
   /// Get yearly statistics for current year

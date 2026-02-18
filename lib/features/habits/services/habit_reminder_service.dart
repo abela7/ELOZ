@@ -1,5 +1,9 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/models/reminder.dart';
+import '../../../core/notifications/models/notification_hub_modules.dart';
+import '../../../core/notifications/services/notification_flow_trace.dart';
+import '../../../core/notifications/services/notification_module_policy.dart';
+import '../../../core/notifications/services/universal_notification_repository.dart';
 import '../../../core/services/notification_service.dart';
 import '../data/models/habit.dart';
 import '../data/models/habit_notification_settings.dart';
@@ -17,8 +21,32 @@ class HabitReminderService {
   /// Too high can saturate the platform channel; 4 is a safe sweet-spot.
   static const int _parallelBatchSize = 4;
 
-  Future<void> scheduleHabitReminders(Habit habit) async {
+  Future<void> scheduleHabitReminders(
+    Habit habit, {
+    String sourceFlow = 'habit_runtime',
+  }) async {
     if (!habit.reminderEnabled) return;
+
+    final policy = await NotificationModulePolicy.read(
+      NotificationHubModuleIds.habit,
+    );
+    if (!policy.enabled) {
+      await cancelHabitReminders(
+        habit.id,
+        sourceFlow: sourceFlow,
+        reason: policy.reason,
+      );
+      return;
+    }
+
+    if (await _hasEnabledUniversalDefinitions(habit.id)) {
+      await cancelHabitReminders(
+        habit.id,
+        sourceFlow: sourceFlow,
+        reason: 'universal_definition_enabled',
+      );
+      return;
+    }
 
     // Load settings ONCE — previously this was re-loaded inside every
     // scheduleHabitReminder call, adding ~14 SharedPreferences reads.
@@ -28,9 +56,12 @@ class HabitReminderService {
     final reminders = _parseReminderDuration(habit.reminderDuration);
     if (reminders.isEmpty) return;
 
-    final windowDays = settings.rollingWindowDays < 1
-        ? 1
-        : settings.rollingWindowDays;
+    final windowDays = settings.rollingWindowDays
+        .clamp(
+          HabitNotificationSettings.minRollingWindowDays,
+          HabitNotificationSettings.maxRollingWindowDays,
+        )
+        .toInt();
     final occurrences = _buildRollingWindowOccurrences(habit, windowDays);
     if (occurrences.isEmpty) return;
 
@@ -61,19 +92,54 @@ class HabitReminderService {
             scheduledDate: p.date,
             channelKeyOverride: channelOverride,
             audioStreamOverride: audioStreamOverride,
+            sourceFlow: sourceFlow,
           ),
         ),
       );
     }
+
+    NotificationFlowTrace.log(
+      event: 'legacy_schedule_result',
+      sourceFlow: sourceFlow,
+      moduleId: NotificationHubModuleIds.habit,
+      entityId: habit.id,
+      details: <String, dynamic>{
+        'occurrenceCount': occurrences.length,
+        'reminderVariants': reminders.length,
+        'plannedSchedules': pairs.length,
+      },
+    );
   }
 
-  Future<void> rescheduleHabitReminders(Habit habit) async {
-    await cancelHabitReminders(habit.id);
-    await scheduleHabitReminders(habit);
+  Future<void> rescheduleHabitReminders(
+    Habit habit, {
+    String sourceFlow = 'habit_reschedule',
+  }) async {
+    await cancelHabitReminders(
+      habit.id,
+      sourceFlow: sourceFlow,
+      reason: 'reschedule',
+    );
+    await scheduleHabitReminders(habit, sourceFlow: sourceFlow);
   }
 
-  Future<void> cancelHabitReminders(String habitId) async {
-    await _notificationService.cancelAllHabitReminders(habitId);
+  Future<void> cancelHabitReminders(
+    String habitId, {
+    String sourceFlow = 'habit_runtime',
+    String reason = 'cancel',
+  }) async {
+    await _notificationService.cancelAllHabitReminders(
+      habitId,
+      sourceFlow: sourceFlow,
+      reason: reason,
+    );
+    NotificationFlowTrace.log(
+      event: 'legacy_cancel_result',
+      sourceFlow: sourceFlow,
+      moduleId: NotificationHubModuleIds.habit,
+      entityId: habitId,
+      reason: reason,
+    );
   }
 
   Future<void> cancelAllHabitReminders() async {
@@ -178,37 +244,60 @@ class HabitReminderService {
     if (reminderDuration == null || reminderDuration.isEmpty) return [];
 
     final normalized = reminderDuration.trim();
-    if (normalized.toLowerCase() == 'no reminder') return [];
+    final lower = normalized.toLowerCase();
+    if (lower == 'no reminder') return [];
 
-    if (normalized.contains('5 min before') ||
-        normalized.contains('5 minutes before')) {
+    // Canonical + legacy "at start time" values.
+    const atTimeValues = <String>{
+      'at task time',
+      'at habit time',
+      'at time',
+      'on time',
+      'at_time',
+      'at start time',
+      'at the start time',
+      'start time',
+      'at start',
+    };
+    if (atTimeValues.contains(lower)) {
+      return [Reminder.atTaskTime()];
+    }
+
+    // Canonical code values (used by some legacy/migrated settings).
+    if (lower == '5_min') return [Reminder.fiveMinutesBefore()];
+    if (lower == '10_min') {
+      return [Reminder(type: 'before', value: 10, unit: 'minutes')];
+    }
+    if (lower == '15_min') return [Reminder.fifteenMinutesBefore()];
+    if (lower == '30_min') return [Reminder.thirtyMinutesBefore()];
+    if (lower == '1_hour') return [Reminder.oneHourBefore()];
+    if (lower == '1_day') return [Reminder.oneDayBefore()];
+
+    if (lower.contains('5 min before') || lower.contains('5 minutes before')) {
       return [Reminder.fiveMinutesBefore()];
     }
-    if (normalized.contains('15 min before') ||
-        normalized.contains('15 minutes before')) {
+    if (lower.contains('10 min before') || lower.contains('10 minutes before')) {
+      return [Reminder(type: 'before', value: 10, unit: 'minutes')];
+    }
+    if (lower.contains('15 min before') || lower.contains('15 minutes before')) {
       return [Reminder.fifteenMinutesBefore()];
     }
-    if (normalized.contains('30 min before') ||
-        normalized.contains('30 minutes before')) {
+    if (lower.contains('30 min before') || lower.contains('30 minutes before')) {
       return [Reminder.thirtyMinutesBefore()];
     }
-    if (normalized.contains('1 hour before') ||
-        normalized.contains('1 hr before')) {
+    if (lower.contains('1 hour before') || lower.contains('1 hr before')) {
       return [Reminder.oneHourBefore()];
     }
-    if (normalized.contains('1 day before')) {
+    if (lower.contains('1 day before')) {
       return [Reminder.oneDayBefore()];
-    }
-    if (normalized.toLowerCase() == 'at task time' ||
-        normalized.toLowerCase() == 'at habit time' ||
-        normalized.toLowerCase() == 'on time') {
-      return [Reminder.atTaskTime()];
     }
     if (normalized.startsWith('Custom:')) {
       return _parseCustomReminder(normalized);
     }
 
-    return [Reminder.fiveMinutesBefore()];
+    // Safer fallback for unknown values: fire at habit time.
+    // (5-min fallback can easily become "past time" and be dropped.)
+    return [Reminder.atTaskTime()];
   }
 
   List<Reminder> _parseCustomReminder(String reminderString) {
@@ -233,5 +322,15 @@ class HabitReminderService {
     }
 
     return reminders.isNotEmpty ? reminders : [Reminder.fiveMinutesBefore()];
+  }
+
+  Future<bool> _hasEnabledUniversalDefinitions(String habitId) async {
+    final repo = UniversalNotificationRepository();
+    final defs = await repo.getAll(
+      moduleId: NotificationHubModuleIds.habit,
+      entityId: habitId,
+      enabledOnly: true,
+    );
+    return defs.isNotEmpty;
   }
 }

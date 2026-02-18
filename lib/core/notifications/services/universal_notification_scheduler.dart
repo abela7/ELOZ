@@ -7,9 +7,42 @@ import '../../../features/finance/data/repositories/bill_repository.dart';
 import '../../../features/finance/data/repositories/debt_repository.dart';
 import '../../../features/finance/data/repositories/recurring_income_repository.dart';
 import '../../../features/habits/data/repositories/habit_repository.dart';
+import '../../../features/mbt/notifications/mbt_notification_contract.dart';
+import '../../../features/behavior/notifications/behavior_notification_contract.dart';
 import '../../../features/sleep/data/services/wind_down_schedule_service.dart';
 import '../models/notification_hub_schedule_result.dart';
 import '../notifications.dart';
+import 'notification_flow_trace.dart';
+import 'notification_module_policy.dart';
+
+class UniversalNotificationSyncResult {
+  final int processed;
+  final int scheduled;
+  final int cancelled;
+  final int skipped;
+  final int failed;
+  final int durationMs;
+
+  const UniversalNotificationSyncResult({
+    this.processed = 0,
+    this.scheduled = 0,
+    this.cancelled = 0,
+    this.skipped = 0,
+    this.failed = 0,
+    this.durationMs = 0,
+  });
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'processed': processed,
+      'scheduled': scheduled,
+      'cancelled': cancelled,
+      'skipped': skipped,
+      'failed': failed,
+      'durationMs': durationMs,
+    };
+  }
+}
 
 /// Schedules Universal Notifications with the OS.
 ///
@@ -19,25 +52,131 @@ import '../notifications.dart';
 class UniversalNotificationScheduler {
   final UniversalNotificationRepository _repo;
   final NotificationHub _hub;
+  final Future<void> Function()? _hubInitializerOverride;
+  final Future<NotificationModulePolicyDecision> Function(String moduleId)?
+  _policyReaderOverride;
+  final Future<NotificationHubScheduleResult> Function(
+    NotificationHubScheduleRequest request,
+  )?
+  _hubScheduleOverride;
+  final Future<void> Function({
+    required int notificationId,
+    String? entityId,
+    String? payload,
+    String? title,
+    Map<String, dynamic>? metadata,
+  })?
+  _hubCancelOverride;
+  final int Function({
+    required String moduleId,
+    required String entityId,
+    required String reminderType,
+    required int reminderValue,
+    required String reminderUnit,
+  })?
+  _idGeneratorOverride;
+
+  static UniversalNotificationSyncResult? _lastSyncSummary;
+  static DateTime? _lastSyncCompletedAt;
 
   UniversalNotificationScheduler({
     UniversalNotificationRepository? repo,
     NotificationHub? hub,
-  })  : _repo = repo ?? UniversalNotificationRepository(),
-        _hub = hub ?? NotificationHub();
+    Future<void> Function()? hubInitializerOverride,
+    Future<NotificationModulePolicyDecision> Function(String moduleId)?
+    policyReaderOverride,
+    Future<NotificationHubScheduleResult> Function(
+      NotificationHubScheduleRequest request,
+    )?
+    hubScheduleOverride,
+    Future<void> Function({
+      required int notificationId,
+      String? entityId,
+      String? payload,
+      String? title,
+      Map<String, dynamic>? metadata,
+    })?
+    hubCancelOverride,
+    int Function({
+      required String moduleId,
+      required String entityId,
+      required String reminderType,
+      required int reminderValue,
+      required String reminderUnit,
+    })?
+    idGeneratorOverride,
+  }) : _repo = repo ?? UniversalNotificationRepository(),
+       _hub = hub ?? NotificationHub(),
+       _hubInitializerOverride = hubInitializerOverride,
+       _policyReaderOverride = policyReaderOverride,
+       _hubScheduleOverride = hubScheduleOverride,
+       _hubCancelOverride = hubCancelOverride,
+       _idGeneratorOverride = idGeneratorOverride;
+
+  static UniversalNotificationSyncResult? get lastSyncSummary =>
+      _lastSyncSummary;
+
+  static DateTime? get lastSyncCompletedAt => _lastSyncCompletedAt;
 
   /// Syncs all universal notifications to the OS scheduler.
   Future<void> syncAll() async {
-    await _hub.initialize();
+    await syncAllWithMetrics();
+  }
+
+  /// Syncs all universal notifications and returns aggregate counters.
+  Future<UniversalNotificationSyncResult> syncAllWithMetrics() async {
+    final stopwatch = Stopwatch()..start();
+    if (_hubInitializerOverride != null) {
+      await _hubInitializerOverride();
+    } else {
+      await _hub.initialize();
+    }
     await _repo.init();
     final all = await _repo.getAll();
+    var processed = 0;
+    var scheduled = 0;
+    var cancelled = 0;
+    var skipped = 0;
+    var failed = 0;
+
     for (final n in all) {
+      processed++;
       if (!n.enabled) {
         await _cancelForNotification(n);
+        cancelled++;
+        skipped++;
         continue;
       }
-      await _scheduleOne(n);
+      final result = await _scheduleOne(n);
+      if (result == null) {
+        skipped++;
+        continue;
+      }
+      if (result.success) {
+        scheduled++;
+      } else {
+        failed++;
+      }
     }
+
+    stopwatch.stop();
+    final summary = UniversalNotificationSyncResult(
+      processed: processed,
+      scheduled: scheduled,
+      cancelled: cancelled,
+      skipped: skipped,
+      failed: failed,
+      durationMs: stopwatch.elapsedMilliseconds,
+    );
+
+    NotificationFlowTrace.log(
+      event: 'universal_sync_summary',
+      sourceFlow: 'universal_sync',
+      details: summary.toMap(),
+    );
+    _lastSyncSummary = summary;
+    _lastSyncCompletedAt = DateTime.now();
+    return summary;
   }
 
   /// Syncs notifications for a single entity (e.g. after save/delete).
@@ -45,7 +184,11 @@ class UniversalNotificationScheduler {
   /// Returns [NotificationHubScheduleResult.ok] if all enabled notifications
   /// were scheduled, or a failed result with [failureReason] for user feedback.
   Future<NotificationHubScheduleResult> syncForEntity(String entityId) async {
-    await _hub.initialize();
+    if (_hubInitializerOverride != null) {
+      await _hubInitializerOverride();
+    } else {
+      await _hub.initialize();
+    }
     await _repo.init();
     final list = await _repo.getByEntity(entityId);
     for (final n in list) {
@@ -64,11 +207,12 @@ class UniversalNotificationScheduler {
         }
       }
     }
-    return lastFailure ?? (anyScheduled ? NotificationHubScheduleResult.ok : _noDueDateResult);
+    return lastFailure ??
+        (anyScheduled ? NotificationHubScheduleResult.ok : _noDueDateResult);
   }
 
-  static final NotificationHubScheduleResult _noDueDateResult =
-      NotificationHubScheduleResult.failed(
+  static final NotificationHubScheduleResult
+  _noDueDateResult = NotificationHubScheduleResult.failed(
     'Could not compute due date. Check the bill, task, or habit has a valid due.',
   );
 
@@ -85,6 +229,16 @@ class UniversalNotificationScheduler {
     final payload = _buildPayloadForLogging(n);
     final title = _displayNameForLogging(n);
     final reason = _cancelReasonForLogging(n);
+    if (_hubCancelOverride != null) {
+      await _hubCancelOverride(
+        notificationId: id,
+        entityId: n.entityId,
+        payload: payload,
+        title: title,
+        metadata: reason != null ? {'reason': reason} : null,
+      );
+      return;
+    }
     await _hub.cancelByNotificationId(
       notificationId: id,
       entityId: n.entityId,
@@ -109,10 +263,20 @@ class UniversalNotificationScheduler {
       final day = _weekdayFromEntityId(n.entityId);
       return day != null ? 'Wind-down reminder ($day)' : 'Wind-down reminder';
     }
-    if (n.moduleId == 'sleep' && n.section == 'bedtime') return 'Bedtime reminder';
-    if (n.moduleId == 'sleep' && n.section == 'wakeup') return 'Wake-up reminder';
+    if (n.moduleId == 'sleep' && n.section == 'bedtime') {
+      return 'Bedtime reminder';
+    }
+    if (n.moduleId == 'sleep' && n.section == 'wakeup') {
+      return 'Wake-up reminder';
+    }
     if (n.moduleId == 'task') return 'Task reminder';
     if (n.moduleId == 'habit') return 'Habit reminder';
+    if (n.moduleId == NotificationHubModuleIds.mbtMood) {
+      return 'Daily mood check-in';
+    }
+    if (n.moduleId == NotificationHubModuleIds.behavior) {
+      return 'Behavior reminder';
+    }
     return '${n.section.isNotEmpty ? n.section : n.moduleId} reminder';
   }
 
@@ -141,12 +305,92 @@ class UniversalNotificationScheduler {
   }
 
   int _notificationIdFor(UniversalNotification n) {
-    return n.id.hashCode & 0x7FFFFFFF;
+    // Keep IDs deterministic inside the module's reserved Hub range.
+    final id = _idGeneratorOverride != null
+        ? _idGeneratorOverride(
+            moduleId: n.moduleId,
+            entityId: '${n.entityId}|${n.id}',
+            reminderType: n.timing,
+            reminderValue: n.timingValue,
+            reminderUnit: n.timingUnit,
+          )
+        : _hub.generateNotificationId(
+            moduleId: n.moduleId,
+            entityId: '${n.entityId}|${n.id}',
+            reminderType: n.timing,
+            reminderValue: n.timingValue,
+            reminderUnit: n.timingUnit,
+          );
+    if (kDebugMode && !_isInModuleRange(n.moduleId, id)) {
+      debugPrint(
+        'UniversalNotificationScheduler: id out of module range '
+        '(module=${n.moduleId}, id=$id)',
+      );
+      NotificationFlowTrace.log(
+        event: 'universal_id_out_of_range',
+        sourceFlow: 'universal_sync',
+        moduleId: n.moduleId,
+        entityId: n.entityId,
+        notificationId: id,
+      );
+    }
+    return id;
+  }
+
+  bool _isInModuleRange(String moduleId, int notificationId) {
+    if (moduleId == NotificationHubModuleIds.task) {
+      return notificationId >= NotificationHubIdRanges.taskStart &&
+          notificationId <= NotificationHubIdRanges.taskEnd;
+    }
+    if (moduleId == NotificationHubModuleIds.habit) {
+      return notificationId >= NotificationHubIdRanges.habitStart &&
+          notificationId <= NotificationHubIdRanges.habitEnd;
+    }
+    if (moduleId == NotificationHubModuleIds.finance) {
+      return notificationId >= NotificationHubIdRanges.financeStart &&
+          notificationId <= NotificationHubIdRanges.financeEnd;
+    }
+    if (moduleId == NotificationHubModuleIds.sleep) {
+      return notificationId >= NotificationHubIdRanges.sleepStart &&
+          notificationId <= NotificationHubIdRanges.sleepEnd;
+    }
+    if (moduleId == NotificationHubModuleIds.mbtMood) {
+      return notificationId >= NotificationHubIdRanges.mbtMoodStart &&
+          notificationId <= NotificationHubIdRanges.mbtMoodEnd;
+    }
+    if (moduleId == NotificationHubModuleIds.behavior) {
+      return notificationId >= NotificationHubIdRanges.behaviorStart &&
+          notificationId <= NotificationHubIdRanges.behaviorEnd;
+    }
+    return true;
   }
 
   /// Returns null if skipped (no due, past, empty title); otherwise hub result.
-  Future<NotificationHubScheduleResult?> _scheduleOne(UniversalNotification n) async {
-    // Respect module/section enabled state – don't schedule when disabled.
+  Future<NotificationHubScheduleResult?> _scheduleOne(
+    UniversalNotification n,
+  ) async {
+    final policy = _policyReaderOverride != null
+        ? await _policyReaderOverride(n.moduleId)
+        : await NotificationModulePolicy.read(n.moduleId);
+    if (!policy.enabled) {
+      await _cancelForNotification(n);
+      if (kDebugMode) {
+        debugPrint(
+          'UniversalNotificationScheduler: module policy blocked '
+          '${n.moduleId}/${n.section}/${n.entityId} (${policy.reason})',
+        );
+      }
+      NotificationFlowTrace.log(
+        event: 'universal_schedule_skipped',
+        sourceFlow: 'universal_sync',
+        moduleId: n.moduleId,
+        entityId: n.entityId,
+        reason: policy.reason,
+      );
+      return null;
+    }
+
+    // Respect module/section enabled state â€“ don't schedule when disabled.
     if (n.moduleId == 'sleep') {
       if (n.section == 'winddown') {
         final enabled = await WindDownScheduleService().getEnabled();
@@ -154,7 +398,7 @@ class UniversalNotificationScheduler {
           await _cancelForNotification(n);
           if (kDebugMode) {
             debugPrint(
-              'UniversalNotificationScheduler: wind-down disabled – cancel and skip ${n.entityId}',
+              'UniversalNotificationScheduler: wind-down disabled â€“ cancel and skip ${n.entityId}',
             );
           }
           return null;
@@ -167,7 +411,7 @@ class UniversalNotificationScheduler {
           await _cancelForNotification(n);
           if (kDebugMode) {
             debugPrint(
-              'UniversalNotificationScheduler: sleep reminders disabled – cancel and skip ${n.entityId}',
+              'UniversalNotificationScheduler: sleep reminders disabled â€“ cancel and skip ${n.entityId}',
             );
           }
           return null;
@@ -175,12 +419,17 @@ class UniversalNotificationScheduler {
       }
     }
 
-    final due = await _getDueDateForEntity(n.moduleId, n.section, n.entityId, n);
+    final due = await _getDueDateForEntity(
+      n.moduleId,
+      n.section,
+      n.entityId,
+      n,
+    );
     if (due == null) {
       await _cancelForNotification(n);
       if (kDebugMode) {
         debugPrint(
-          'UniversalNotificationScheduler: no due date for ${n.moduleId}/${n.section}/${n.entityId} – skip',
+          'UniversalNotificationScheduler: no due date for ${n.moduleId}/${n.section}/${n.entityId} â€“ skip',
         );
       }
       return _noDueDateResult;
@@ -188,7 +437,8 @@ class UniversalNotificationScheduler {
 
     final scheduledAt = _computeScheduledAt(n, due);
     if (scheduledAt.isBefore(
-        DateTime.now().subtract(const Duration(seconds: 10)))) {
+      DateTime.now().subtract(const Duration(seconds: 10)),
+    )) {
       await _cancelForNotification(n);
       if (kDebugMode) {
         debugPrint(
@@ -223,22 +473,23 @@ class UniversalNotificationScheduler {
     // Use configured actions only when actionsEnabled; otherwise no action buttons
     final actionButtons = n.actionsEnabled
         ? n.actions
-            .map((a) => HubNotificationAction(
+              .map(
+                (a) => HubNotificationAction(
                   actionId: a.actionId,
                   label: a.label,
                   showsUserInterface: a.showsUserInterface,
                   cancelNotification: a.cancelNotification,
-                ))
-            .toList()
+                ),
+              )
+              .toList()
         : <HubNotificationAction>[];
 
     // Default icon when none selected (notifications_rounded = 0xe7f4)
     const defaultIconCodePoint = 0xe7f4;
     const defaultIconFontFamily = 'MaterialIcons';
 
-    // nek12 Layer 3: alarmClock for critical reminders (wind-down) – better OEM reliability
-    final useAlarmClock =
-        n.moduleId == 'sleep' && n.section == 'winddown';
+    // nek12 Layer 3: alarmClock for critical reminders (wind-down) â€“ better OEM reliability
+    final useAlarmClock = n.moduleId == 'sleep' && n.section == 'winddown';
 
     final request = NotificationHubScheduleRequest(
       moduleId: n.moduleId,
@@ -256,12 +507,15 @@ class UniversalNotificationScheduler {
         'universalId': n.id,
         'section': n.section,
         'condition': n.condition,
+        'sourceFlow': 'universal_sync',
       },
       actionButtons: actionButtons,
       useAlarmClockScheduleMode: useAlarmClock,
     );
 
-    final result = await _hub.schedule(request);
+    final result = _hubScheduleOverride != null
+        ? await _hubScheduleOverride(request)
+        : await _hub.schedule(request);
     if (kDebugMode) {
       if (result.success) {
         debugPrint(
@@ -277,13 +531,7 @@ class UniversalNotificationScheduler {
   }
 
   DateTime _computeScheduledAt(UniversalNotification n, DateTime due) {
-    final targetTime = DateTime(
-      due.year,
-      due.month,
-      due.day,
-      n.hour,
-      n.minute,
-    );
+    final targetTime = DateTime(due.year, due.month, due.day, n.hour, n.minute);
 
     switch (n.timing) {
       case 'before':
@@ -337,9 +585,60 @@ class UniversalNotificationScheduler {
         return _getHabitDueDate(entityId, n);
       case 'sleep':
         return _getSleepDueDate(section, entityId, n);
+      case NotificationHubModuleIds.mbtMood:
+        return _getMbtMoodDueDate(section, entityId, n);
+      case NotificationHubModuleIds.behavior:
+        return _getBehaviorDueDate(section, entityId, n);
       default:
         return null;
     }
+  }
+
+  DateTime? _getMbtMoodDueDate(
+    String section,
+    String entityId,
+    UniversalNotification n,
+  ) {
+    if (section != MbtNotificationContract.sectionMoodCheckin ||
+        entityId != MbtNotificationContract.entityMoodDailyCheckin) {
+      return null;
+    }
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final todayScheduledAt = _computeScheduledAt(n, today);
+    if (todayScheduledAt.isAfter(now.subtract(const Duration(seconds: 10)))) {
+      return today;
+    }
+    return today.add(const Duration(days: 1));
+  }
+
+  DateTime? _getBehaviorDueDate(
+    String section,
+    String entityId,
+    UniversalNotification n,
+  ) {
+    if (section != BehaviorNotificationContract.sectionDailyReminder) {
+      return null;
+    }
+    final weekday = BehaviorNotificationContract.weekdayFromEntity(entityId);
+    if (weekday == null) {
+      return null;
+    }
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    var due = _nextOccurrenceOfWeekday(today, weekday);
+    var scheduledAt = _computeScheduledAt(n, due);
+    const maxWeeks = 8;
+    var weeksChecked = 0;
+    while (scheduledAt.isBefore(now.subtract(const Duration(minutes: 1))) &&
+        weeksChecked < maxWeeks) {
+      due = due.add(const Duration(days: 7));
+      scheduledAt = _computeScheduledAt(n, due);
+      weeksChecked++;
+    }
+    return weeksChecked < maxWeeks ? due : null;
   }
 
   Future<DateTime?> _getSleepDueDate(
@@ -353,15 +652,14 @@ class UniversalNotificationScheduler {
     if (section == 'winddown') {
       final weekday = _weekdayFromWindDownEntityId(entityId);
       if (weekday == null) return null;
-      // Wind-down: Mon–Sun week. Include creation day when it matches the
-      // weekday (e.g. add on Fri → schedule Fri today). Only advance to next
+      // Wind-down: Monâ€“Sun week. Include creation day when it matches the
+      // weekday (e.g. add on Fri â†’ schedule Fri today). Only advance to next
       // week when the reminder time has already passed.
       var due = _nextOccurrenceOfWeekday(today, weekday);
       var scheduledAt = _computeScheduledAt(n, due);
       const maxWeeks = 8;
       var weeksChecked = 0;
-      while (
-          scheduledAt.isBefore(now.subtract(const Duration(minutes: 1))) &&
+      while (scheduledAt.isBefore(now.subtract(const Duration(minutes: 1))) &&
           weeksChecked < maxWeeks) {
         due = due.add(const Duration(days: 7));
         scheduledAt = _computeScheduledAt(n, due);
@@ -453,9 +751,7 @@ class UniversalNotificationScheduler {
         continue;
       }
       final scheduledAt = _computeScheduledAt(n, day);
-      if (scheduledAt.isAfter(
-        now.subtract(const Duration(seconds: 10)),
-      )) {
+      if (scheduledAt.isAfter(now.subtract(const Duration(seconds: 10)))) {
         return day;
       }
     }
@@ -466,7 +762,7 @@ class UniversalNotificationScheduler {
     return _hub.adapterFor(moduleId);
   }
 
-  /// Fallback when bill.nextDueDate is null – compute from startDate/frequency.
+  /// Fallback when bill.nextDueDate is null â€“ compute from startDate/frequency.
   DateTime? _computeBillNextDueFallback(Bill bill) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -508,9 +804,14 @@ class UniversalNotificationScheduler {
         }
         return today.add(const Duration(days: 1));
       default:
-        final start = DateTime(bill.startDate.year, bill.startDate.month, bill.startDate.day);
-        return start.isBefore(today) ? today.add(const Duration(days: 1)) : start;
+        final start = DateTime(
+          bill.startDate.year,
+          bill.startDate.month,
+          bill.startDate.day,
+        );
+        return start.isBefore(today)
+            ? today.add(const Duration(days: 1))
+            : start;
     }
   }
 }
-

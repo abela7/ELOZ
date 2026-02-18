@@ -7,8 +7,8 @@ import '../../data/models/habit_completion.dart';
 import '../../data/models/habit_type.dart';
 import '../../data/repositories/habit_repository.dart';
 import '../../data/repositories/habit_type_repository.dart';
-import '../../../../core/notifications/notifications.dart';
 import '../../../../core/services/reminder_manager.dart';
+import '../../../../core/utils/perf_trace.dart';
 import 'habit_type_providers.dart';
 
 /// Singleton provider for HabitRepository instance (cached)
@@ -50,18 +50,23 @@ class HabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
   /// Load all habits from database, pre-computing today's completion statuses
   /// in the same round-trip so the dashboard can render immediately.
   Future<void> loadHabits({bool runBackgroundBackfill = true}) async {
+    final trace = PerfTrace('HabitsNotifier.loadHabits');
     if (!state.hasValue) {
       state = const AsyncValue.loading();
+      trace.step('set_loading');
     }
     try {
       // Single round-trip: fetch habits + today's completions in parallel.
       final habitsFuture = repository.getAllHabits();
       final now = DateTime.now();
       final todayDate = DateTime(now.year, now.month, now.day);
-      final completionsFuture =
-          repository.getCompletionsForAllHabitsOnDate(todayDate);
+      final completionsFuture = repository.getCompletionsForAllHabitsOnDate(
+        todayDate,
+      );
+      trace.step('futures_created');
 
       final results = await Future.wait([habitsFuture, completionsFuture]);
+      trace.step('futures_resolved');
       final habits = results[0] as List<Habit>;
       final completionsByHabit =
           results[1] as Map<String, List<HabitCompletion>>;
@@ -73,17 +78,26 @@ class HabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
         }
         return a.createdAt.compareTo(b.createdAt);
       });
+      trace.step('sorted_habits', details: {'count': habits.length});
 
       // Pre-compute today's statuses
       _todayStatuses = _buildDayStatuses(habits, completionsByHabit);
+      trace.step(
+        'statuses_built',
+        details: {'statusCount': _todayStatuses.length},
+      );
 
       state = AsyncValue.data(habits);
+      trace.step('state_updated');
 
       if (runBackgroundBackfill) {
         _runQuitBackfillInBackground();
+        trace.step('quit_backfill_triggered');
       }
+      trace.end('done');
     } catch (e, stackTrace) {
       state = AsyncValue.error(e, stackTrace);
+      trace.end('error', details: {'error': e.toString()});
     }
   }
 
@@ -205,32 +219,43 @@ class HabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
   ///
   /// This is intentionally fire-and-forget so the UI never blocks on
   /// notification scheduling or streak recalculation.
-  Future<void> _backgroundAfterSave(Habit habit, {bool refreshStats = false}) async {
-    try {
-      // Refresh stats (streak, totals) when fields that affect them changed.
-      if (refreshStats) {
+  Future<void> _backgroundAfterSave(
+    Habit habit, {
+    bool refreshStats = false,
+  }) async {
+    // Keep reminder rescheduling isolated so a stats-refresh error cannot
+    // silently block notification updates.
+    if (refreshStats) {
+      try {
         await repository.refreshHabitStats(habit.id);
+      } catch (e) {
+        debugPrint(
+          '⚠️ HabitNotifier._backgroundAfterSave refreshHabitStats: $e',
+        );
       }
+    }
 
+    try {
       // Reschedule reminders (cancel old + schedule new in parallel batches).
       await _reminderManager.rescheduleRemindersForHabit(habit);
+    } catch (e) {
+      debugPrint(
+        '⚠️ HabitNotifier._backgroundAfterSave rescheduleReminders: $e',
+      );
+    }
 
+    try {
       // Reload the full list so calculated fields (streak, goal status)
       // propagate to all watchers. This intentionally skips quit-backfill
       // since we just saved a single habit – no need for a full scan.
       await loadHabits(runBackgroundBackfill: false);
     } catch (e) {
-      debugPrint('⚠️ HabitNotifier._backgroundAfterSave: $e');
+      debugPrint('⚠️ HabitNotifier._backgroundAfterSave loadHabits: $e');
     }
   }
 
   Future<void> _cleanupDeletedHabitNotifications(String habitId) async {
-    await _reminderManager.cancelRemindersForHabit(habitId);
-    await NotificationHub().cancelForEntity(
-      moduleId: NotificationHubModuleIds.habit,
-      entityId: habitId,
-    );
-    await UniversalNotificationRepository().deleteByEntity(habitId);
+    await _reminderManager.handleHabitDeleted(habitId);
   }
 
   /// Delete a habit
@@ -671,8 +696,12 @@ final habitsDashboardListsProvider =
         bool showOnlySpecial,
       })
     >((ref, args) {
+      final trace = PerfTrace('HabitsProvider.dashboardLists');
       final allHabits = ref.watch(habitListValueProvider);
-      if (allHabits.isEmpty) return HabitsDashboardLists.empty;
+      if (allHabits.isEmpty) {
+        trace.end('empty');
+        return HabitsDashboardLists.empty;
+      }
 
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
@@ -691,6 +720,14 @@ final habitsDashboardListsProvider =
               orElse: () => const <String, HabitDayStatus>{},
             );
       }
+      trace.step(
+        'statuses_ready',
+        details: {
+          'isToday': isToday,
+          'statusCount': dayStatuses.length,
+          'habitCount': allHabits.length,
+        },
+      );
 
       final displayHabits = <Habit>[];
       final completedHabits = <Habit>[];
@@ -728,12 +765,22 @@ final habitsDashboardListsProvider =
       completedHabits.sort(_compareSpecialThenTitle);
       skippedHabits.sort(_compareSpecialThenTitle);
 
-      return HabitsDashboardLists(
+      final output = HabitsDashboardLists(
         displayHabits: displayHabits,
         completedHabits: completedHabits,
         skippedHabits: skippedHabits,
         notDueHabits: notDueHabits,
       );
+      trace.end(
+        'done',
+        details: {
+          'display': output.displayHabits.length,
+          'completed': output.completedHabits.length,
+          'skipped': output.skippedHabits.length,
+          'notDue': output.notDueHabits.length,
+        },
+      );
+      return output;
     });
 
 bool _matchesDashboardDisplayFilter({
@@ -796,14 +843,22 @@ final habitStatusesOnDateProvider =
       ref,
       date,
     ) async {
+      final trace = PerfTrace('HabitsProvider.statusesOnDate');
       final habits = ref.watch(habitListValueProvider);
       final repository = ref.watch(habitRepositoryProvider);
       final dateOnly = DateTime(date.year, date.month, date.day);
 
-      if (habits.isEmpty) return const <String, HabitDayStatus>{};
+      if (habits.isEmpty) {
+        trace.end('empty');
+        return const <String, HabitDayStatus>{};
+      }
 
       final completionsByHabit = await repository
           .getCompletionsForAllHabitsOnDate(dateOnly);
+      trace.step(
+        'completions_loaded',
+        details: {'groups': completionsByHabit.length, 'habits': habits.length},
+      );
       final result = <String, HabitDayStatus>{};
 
       for (final habit in habits) {
@@ -822,6 +877,7 @@ final habitStatusesOnDateProvider =
         );
       }
 
+      trace.end('done', details: {'statuses': result.length});
       return result;
     });
 
@@ -1050,3 +1106,4 @@ bool _isCompletedForHabitOnDate(
     }
   });
 }
+

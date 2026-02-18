@@ -172,7 +172,9 @@ class _CreateHabitScreenState extends ConsumerState<CreateHabitScreen> {
       _endDate = habit.endDate;
       _endOccurrences = habit.endOccurrences;
       _reminderEnabled = habit.reminderEnabled;
-      _reminderDuration = habit.reminderDuration ?? 'At habit time';
+      _reminderDuration = _normalizeReminderDuration(
+        habit.reminderDuration ?? 'At habit time',
+      );
       if (habit.reminderMinutes != null) {
         _reminderTime = TimeOfDay(
           hour: habit.reminderMinutes! ~/ 60,
@@ -278,7 +280,11 @@ class _CreateHabitScreenState extends ConsumerState<CreateHabitScreen> {
 
   /// Build a RecurrenceRule from the current frequency settings
   RecurrenceRule? _buildRecurrenceRule() {
-    final startDate = DateTime.now();
+    final startDate = DateTime(
+      _startDate.year,
+      _startDate.month,
+      _startDate.day,
+    );
     
     switch (_frequencyType) {
       case 'daily':
@@ -2272,7 +2278,14 @@ class _CreateHabitScreenState extends ConsumerState<CreateHabitScreen> {
 
   String _normalizeReminderDuration(String rawDuration) {
     final normalized = rawDuration.trim().toLowerCase();
-    if (normalized == 'at task time' || normalized == 'on time') {
+    if (normalized == 'at task time' ||
+        normalized == 'on time' ||
+        normalized == 'at_time' ||
+        normalized == 'at time' ||
+        normalized == 'at start time' ||
+        normalized == 'at the start time' ||
+        normalized == 'start time' ||
+        normalized == 'at start') {
       return 'At habit time';
     }
     return rawDuration;

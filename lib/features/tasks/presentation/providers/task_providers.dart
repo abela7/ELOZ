@@ -49,7 +49,7 @@ class TaskNotifier extends StateNotifier<AsyncValue<List<Task>>> {
   ///
   /// This allows planning ahead while preventing endless scroll (365 instances).
   /// More occurrences are auto-generated as tasks are completed.
-  static const int _planningWindowDays = 14; // 2-week planning window
+  static const int _planningWindowDays = 30; // 30-day default planning window
 
   Future<void> addTask(Task task) async {
     try {
@@ -372,8 +372,8 @@ class TaskNotifier extends StateNotifier<AsyncValue<List<Task>>> {
       // 10. Persist all changes to database
       // First delete old future instances
       for (final task in tasksToDelete) {
-        await repository.deleteTask(task.id);
         await _reminderManager.handleTaskDeleted(task.id);
+        await repository.deleteTask(task.id);
       }
 
       // Then create/update new instances
@@ -428,10 +428,10 @@ class TaskNotifier extends StateNotifier<AsyncValue<List<Task>>> {
         final updatedTasks = tasks.where((t) => t.id != id).toList();
         state = AsyncValue.data(updatedTasks);
       });
+      // Cancel all reminders for deleted task before removing entity data.
+      await _reminderManager.handleTaskDeleted(id);
       // Persist to database
       await repository.deleteTask(id);
-      // Cancel all reminders for deleted task
-      await _reminderManager.handleTaskDeleted(id);
     } catch (e, stackTrace) {
       state = AsyncValue.error(e, stackTrace);
       await loadTasks(); // Reload on error
@@ -465,8 +465,8 @@ class TaskNotifier extends StateNotifier<AsyncValue<List<Task>>> {
 
       // Persist deletions to database
       for (final taskId in idsToDelete) {
-        await repository.deleteTask(taskId);
         await _reminderManager.handleTaskDeleted(taskId);
+        await repository.deleteTask(taskId);
       }
     } catch (e, stackTrace) {
       state = AsyncValue.error(e, stackTrace);
@@ -505,8 +505,8 @@ class TaskNotifier extends StateNotifier<AsyncValue<List<Task>>> {
 
       // Persist deletions to database
       for (final taskId in idsToDelete) {
-        await repository.deleteTask(taskId);
         await _reminderManager.handleTaskDeleted(taskId);
+        await repository.deleteTask(taskId);
       }
 
       return idsToDelete.length;
@@ -578,8 +578,8 @@ class TaskNotifier extends StateNotifier<AsyncValue<List<Task>>> {
 
       // Persist deletions to database
       for (final taskId in idsToDelete) {
-        await repository.deleteTask(taskId);
         await _reminderManager.handleTaskDeleted(taskId);
+        await repository.deleteTask(taskId);
         deletedCount++;
       }
 
@@ -1071,8 +1071,8 @@ class TaskNotifier extends StateNotifier<AsyncValue<List<Task>>> {
 
       // Persist changes
       for (final taskId in tasksToDelete) {
-        await repository.deleteTask(taskId);
         await _reminderManager.handleTaskDeleted(taskId);
+        await repository.deleteTask(taskId);
       }
       for (final task in tasksToUpdate) {
         await repository.updateTask(task);
@@ -1203,8 +1203,8 @@ class TaskNotifier extends StateNotifier<AsyncValue<List<Task>>> {
 
       // Delete auto-generated recurring tasks
       for (final taskId in tasksToDeleteIds) {
-        await repository.deleteTask(taskId);
         await _reminderManager.handleTaskDeleted(taskId);
+        await repository.deleteTask(taskId);
       }
     } catch (e, stackTrace) {
       state = AsyncValue.error(e, stackTrace);
@@ -1336,8 +1336,8 @@ class TaskNotifier extends StateNotifier<AsyncValue<List<Task>>> {
 
         // Persist changes
         await repository.updateTask(originalTask!);
-        await repository.deleteTask(newTaskId);
         await _reminderManager.handleTaskDeleted(newTaskId);
+        await repository.deleteTask(newTaskId);
         await _reminderManager.scheduleRemindersForTask(originalTask!);
 
         return true;

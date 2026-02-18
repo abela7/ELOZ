@@ -10,7 +10,9 @@ import '../../../notifications_hub/presentation/screens/notification_hub_screen.
 import 'transaction_categories_screen.dart';
 import 'finance_privacy_security_screen.dart';
 import 'finance_notification_settings_screen.dart';
+import '../../finance_module.dart';
 import '../providers/finance_providers.dart';
+import '../providers/income_providers.dart';
 import '../../data/services/finance_encrypted_backup_service.dart';
 import '../../data/services/finance_settings_service.dart';
 import '../../utils/currency_utils.dart';
@@ -1589,13 +1591,14 @@ class _FinanceSettingsScreenState extends ConsumerState<FinanceSettingsScreen> {
           ],
         ),
         content: Text(
-          'This will:\n'
-          '• Delete all transactions\n'
-          '• Reset all account balances to initial values\n'
-          '• Reset budget spending to zero\n'
-          '• Delete all debts\n'
-          '• Delete all savings goals\n\n'
-          'Your accounts, budgets, and categories will be preserved.\n\n'
+          'This will permanently delete ALL finance data:\n'
+          '• All transactions\n'
+          '• All accounts\n'
+          '• All budgets, debts, bills\n'
+          '• All savings goals and recurring incomes\n'
+          '• All categories and templates\n\n'
+          'Your currency, security, and notification settings will be kept.\n'
+          'A fresh default account will be created.\n\n'
           'This action cannot be undone.',
           style: TextStyle(
             color: isDark ? const Color(0xFFBDBDBD) : const Color(0xFF6E6E6E),
@@ -1631,16 +1634,9 @@ class _FinanceSettingsScreenState extends ConsumerState<FinanceSettingsScreen> {
     );
   }
 
-  /// Performs the actual data reset:
-  /// - Deletes all transactions
-  /// - Resets account balances to initial balance
-  /// - Resets budget spent amounts to 0
-  /// - Deletes all debts
-  /// - Deletes all savings goals
-  /// - Clears daily balance snapshots
-  /// - KEEPS categories and accounts intact
+  /// Performs a full data wipe: deletes ALL finance data, keeps settings only.
+  /// Creates fresh default categories and a default Cash account.
   Future<void> _performDataReset(BuildContext context) async {
-    // Show loading indicator
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -1649,39 +1645,20 @@ class _FinanceSettingsScreenState extends ConsumerState<FinanceSettingsScreen> {
           children: [
             CircularProgressIndicator(color: Colors.red),
             SizedBox(width: 24),
-            Text('Resetting financial data...'),
+            Text('Wiping all finance data...'),
           ],
         ),
       ),
     );
 
     try {
-      // 1. Delete all transactions FIRST (this must happen before balance reset)
-      final transactionRepo = ref.read(transactionRepositoryProvider);
-      await transactionRepo.deleteAllTransactions();
+      final dataResetService = ref.read(financeDataResetServiceProvider);
+      await dataResetService.wipeAllFinanceDataKeepSettings();
+      await FinanceModule.forceReinitializeDefaultsAfterWipe();
 
-      // 2. Clear daily balance snapshots (before account reset)
-      final dailyBalanceService = ref.read(dailyBalanceServiceProvider);
-      await dailyBalanceService.invalidateAll();
-
-      // 3. Reset account balances to initial balance using dedicated method
-      final accountRepo = ref.read(accountRepositoryProvider);
-      await accountRepo.resetAllBalancesToInitial();
-
-      // 4. Reset budget spent amounts to 0 (keep budgets)
-      final budgetRepo = ref.read(budgetRepositoryProvider);
-      await budgetRepo.resetAllBudgetSpending();
-
-      // 5. Delete all debts (keep debt categories)
-      final debtRepo = ref.read(debtRepositoryProvider);
-      await debtRepo.deleteAllDebts();
-
-      // 6. Delete all savings goals
-      final savingsRepo = ref.read(savingsGoalRepositoryProvider);
-      await savingsRepo.deleteAllGoals();
-
-      // 7. Invalidate all providers to refresh UI
       ref.invalidate(allTransactionsProvider);
+      ref.invalidate(allTransactionCategoriesProvider);
+      ref.invalidate(allTransactionTemplatesProvider);
       ref.invalidate(allAccountsProvider);
       ref.invalidate(activeAccountsProvider);
       ref.invalidate(totalBalanceProvider);
@@ -1690,6 +1667,10 @@ class _FinanceSettingsScreenState extends ConsumerState<FinanceSettingsScreen> {
       ref.invalidate(monthlyStatisticsProvider);
       ref.invalidate(yearlyStatisticsProvider);
       ref.invalidate(dailyTotalBalanceProvider);
+      ref.invalidate(allBillsProvider);
+      ref.invalidate(activeBillsProvider);
+      ref.invalidate(billSummaryProvider);
+      ref.invalidate(monthlyBillsCostProvider);
       ref.invalidate(allDebtsProvider);
       ref.invalidate(activeDebtsProvider);
       ref.invalidate(allLentDebtsProvider);
@@ -1700,6 +1681,7 @@ class _FinanceSettingsScreenState extends ConsumerState<FinanceSettingsScreen> {
       ref.invalidate(totalLentByCurrencyForDateProvider);
       ref.invalidate(debtStatisticsProvider);
       ref.invalidate(lentStatisticsProvider);
+      ref.invalidate(recurringIncomesProvider);
       ref.invalidate(allSavingsGoalsProvider);
       ref.invalidate(activeSavingsGoalsProvider);
       ref.invalidate(archivedSavingsGoalsProvider);
@@ -1710,7 +1692,7 @@ class _FinanceSettingsScreenState extends ConsumerState<FinanceSettingsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Financial data reset successfully! Categories and accounts preserved.',
+              'All finance data wiped. Fresh start with default account and categories.',
             ),
             backgroundColor: Colors.green,
           ),
@@ -1721,7 +1703,7 @@ class _FinanceSettingsScreenState extends ConsumerState<FinanceSettingsScreen> {
         Navigator.of(context).pop(); // Close loading dialog
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error resetting data: $e'),
+            content: Text('Error wiping data: $e'),
             backgroundColor: Colors.red,
           ),
         );

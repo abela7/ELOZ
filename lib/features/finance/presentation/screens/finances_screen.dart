@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../../core/theme/dark_gradient.dart';
+import '../../../../core/utils/perf_trace.dart';
 import '../../../../core/widgets/date_navigator_widget.dart';
 import '../../finance_module.dart';
 import '../../data/models/transaction.dart';
@@ -23,6 +24,7 @@ import 'expenses_screen.dart';
 import 'income_screen.dart';
 import 'lending_screen.dart';
 import 'savings_goals_screen.dart';
+import 'finance_report_hub_screen.dart';
 
 enum _BalanceFlowRange { day, week, month, year, custom }
 
@@ -58,6 +60,7 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
   bool _authenticated = false;
   bool _authCheckDone = false;
   String? _startupError;
+  int _buildCount = 0;
 
   @override
   void initState() {
@@ -69,19 +72,22 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
   void _onScroll() {
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
-    final atBottom = pos.pixels >= pos.maxScrollExtent - 80 || pos.maxScrollExtent <= 0;
+    final atBottom =
+        pos.pixels >= pos.maxScrollExtent - 80 || pos.maxScrollExtent <= 0;
     if (_showFab != atBottom && mounted) {
       setState(() => _showFab = atBottom);
     }
   }
 
   Future<void> _openFinance() async {
+    final trace = PerfTrace('FinanceScreen.openFlow');
     if (mounted) {
       setState(() {
         _startupError = null;
         _authCheckDone = false;
         _authenticated = false;
       });
+      trace.step('state_reset');
     }
 
     try {
@@ -90,9 +96,11 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
         preOpenBoxes: true,
         bootstrapDefaults: true,
       ).timeout(_openTimeout);
+      trace.step('module_init_done');
 
       if (!mounted) return;
       await _checkAccess();
+      trace.end('access_check_done');
     } on TimeoutException {
       if (!mounted) return;
       setState(() {
@@ -100,6 +108,7 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
         _authCheckDone = true;
         _authenticated = false;
       });
+      trace.end('timeout');
     } catch (e) {
       debugPrint('Finance open failed: $e');
       if (!mounted) return;
@@ -108,10 +117,12 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
         _authCheckDone = true;
         _authenticated = false;
       });
+      trace.end('error', details: {'error': '$e'});
     }
   }
 
   Future<void> _checkAccess() async {
+    final trace = PerfTrace('FinanceScreen.checkAccess');
     final guard = ref.read(financeAccessGuardProvider);
 
     try {
@@ -123,10 +134,12 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
             _authCheckDone = true;
           });
         }
+        trace.end('session_unlocked');
         return;
       }
 
       final ok = await guard.ensureAccess(context);
+      trace.step('guard_result', details: {'ok': ok});
       if (!mounted) return;
 
       if (ok) {
@@ -144,6 +157,7 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
           Navigator.of(context).pop();
         }
       }
+      trace.end('done', details: {'authenticated': _authenticated});
     } catch (e) {
       debugPrint('Finance unlock failed: $e');
       if (!mounted) return;
@@ -152,6 +166,7 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
         _authenticated = false;
         _authCheckDone = true;
       });
+      trace.end('error', details: {'error': '$e'});
     }
   }
 
@@ -164,10 +179,12 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final trace = PerfTrace('FinanceScreen.build#${++_buildCount}');
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     // Show nothing until auth check completes.
     if (!_authCheckDone) {
+      trace.end('auth_pending');
       return Scaffold(
         body: isDark
             ? DarkGradient.wrap(
@@ -178,6 +195,7 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
     }
 
     if (_startupError != null) {
+      trace.end('startup_error', details: {'error': _startupError!});
       return Scaffold(
         body: isDark
             ? DarkGradient.wrap(
@@ -189,6 +207,7 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
 
     // If authentication failed, keep a secure locked state.
     if (!_authenticated) {
+      trace.end('locked_state');
       return Scaffold(
         body: isDark
             ? DarkGradient.wrap(child: _buildLockedState(context, isDark))
@@ -206,13 +225,25 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
       transactionsForDateProvider(normalizedDate),
     );
 
-    return Scaffold(
+    final widget = Scaffold(
       body: isDark
           ? DarkGradient.wrap(
               child: _buildContent(context, isDark, transactionsAsync),
             )
           : _buildContent(context, isDark, transactionsAsync),
     );
+    trace.end(
+      'done',
+      details: {
+        'date': normalizedDate.toIso8601String().split('T').first,
+        'txState': transactionsAsync.when(
+          data: (_) => 'data',
+          loading: () => 'loading',
+          error: (_, __) => 'error',
+        ),
+      },
+    );
+    return widget;
   }
 
   Widget _buildContent(
@@ -475,12 +506,34 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
     bool isDark,
     List<Transaction> transactions,
   ) {
+    final trace = PerfTrace('FinanceScreen.buildFinanceContent');
     final defaultCurrencyAsync = ref.watch(defaultCurrencyProvider);
     final defaultCurrency =
         defaultCurrencyAsync.value ?? FinanceSettingsService.fallbackCurrency;
     final monthlyStatsAsync = ref.watch(monthlyStatisticsProvider);
     final totalBalanceAsync = ref.watch(
       dailyTotalBalanceProvider(_selectedDate),
+    );
+    trace.step(
+      'providers_ready',
+      details: {
+        'txCount': transactions.length,
+        'defaultCurrencyState': defaultCurrencyAsync.when(
+          data: (_) => 'data',
+          loading: () => 'loading',
+          error: (_, __) => 'error',
+        ),
+        'monthlyState': monthlyStatsAsync.when(
+          data: (_) => 'data',
+          loading: () => 'loading',
+          error: (_, __) => 'error',
+        ),
+        'balanceState': totalBalanceAsync.when(
+          data: (_) => 'data',
+          loading: () => 'loading',
+          error: (_, __) => 'error',
+        ),
+      },
     );
 
     // Calculate statistics for selected date
@@ -492,6 +545,15 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
         .where((t) => t.isExpense && !t.isBalanceAdjustment)
         .length;
     final transferTransactions = transactions.where((t) => t.isTransfer).length;
+    trace.step(
+      'daily_stats_computed',
+      details: {
+        'all': allTransactions,
+        'income': incomeTransactions,
+        'expense': expenseTransactions,
+        'transfer': transferTransactions,
+      },
+    );
 
     // Group income/expense by currency to avoid mixing currencies
     final Map<String, double> totalIncomeByCurrency = {};
@@ -512,6 +574,13 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
       totalExpenseByCurrency[currency] =
           (totalExpenseByCurrency[currency] ?? 0) + t.amount;
     }
+    trace.step(
+      'currency_groups_done',
+      details: {
+        'incomeCurrencies': totalIncomeByCurrency.length,
+        'expenseCurrencies': totalExpenseByCurrency.length,
+      },
+    );
 
     // For display, use primary currency (first currency found, or ETB)
     final primaryCurrency = transactions.isNotEmpty
@@ -552,9 +621,16 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
           final minB = b.transactionTimeMinute ?? 0;
           return minB.compareTo(minA);
         });
+    trace.step(
+      'display_sorted',
+      details: {
+        'filter': _selectedFilter,
+        'displayCount': displayTransactions.length,
+      },
+    );
 
     // Wrap content in GestureDetector for swipe navigation
-    return GestureDetector(
+    final widget = GestureDetector(
       behavior: HitTestBehavior.opaque,
       onHorizontalDragEnd: (details) {
         if (details.primaryVelocity == null) return;
@@ -1443,6 +1519,8 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
         ],
       ),
     );
+    trace.end('done');
+    return widget;
   }
 
   /// Opens a bottom sheet with quick actions: add expense, income, payment, etc.
@@ -1535,10 +1613,10 @@ class _FinancesScreenState extends ConsumerState<FinancesScreen> {
   }
 
   void _showReportPlaceholder(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Finance Report screen - Build this next!'),
-        backgroundColor: Color(0xFFCDAF56),
+    HapticFeedback.lightImpact();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const FinanceReportHubScreen(),
       ),
     );
   }
@@ -2836,9 +2914,9 @@ class _FinanceActionGrid extends StatelessWidget {
 
   void _navigate(Widget screen) {
     onClose();
-    Navigator.of(navigatorContext).push(
-      MaterialPageRoute(builder: (_) => screen),
-    );
+    Navigator.of(
+      navigatorContext,
+    ).push(MaterialPageRoute(builder: (_) => screen));
   }
 
   @override
@@ -2847,13 +2925,41 @@ class _FinanceActionGrid extends StatelessWidget {
     final textColor = isDark ? Colors.white : Colors.black87;
 
     final actions = <_ActionItem>[
-      _ActionItem('Add Expense', Icons.trending_down_rounded, () => _navigate(const AddTransactionScreen(initialType: 'expense'))),
-      _ActionItem('Add Income', Icons.trending_up_rounded, () => _navigate(const AddTransactionScreen(initialType: 'income'))),
-      _ActionItem('Add Balance (Fund)', Icons.account_balance_wallet_rounded, () => _navigate(const AddTransactionScreen(initialType: 'income'))),
-      _ActionItem('Add Payment', Icons.payments_rounded, () => _navigate(const AddTransactionScreen(initialType: 'expense'))),
-      _ActionItem('Add Transfer', Icons.swap_horiz_rounded, () => _navigate(const AddTransactionScreen(initialType: 'transfer'))),
-      _ActionItem('Add Bill', Icons.receipt_long_rounded, () => _navigate(const AddBillScreen())),
-      _ActionItem('Add Recurring Income', Icons.repeat_rounded, () => _navigate(const AddRecurringIncomeScreen())),
+      _ActionItem(
+        'Add Expense',
+        Icons.trending_down_rounded,
+        () => _navigate(const AddTransactionScreen(initialType: 'expense')),
+      ),
+      _ActionItem(
+        'Add Income',
+        Icons.trending_up_rounded,
+        () => _navigate(const AddTransactionScreen(initialType: 'income')),
+      ),
+      _ActionItem(
+        'Add Balance (Fund)',
+        Icons.account_balance_wallet_rounded,
+        () => _navigate(const AddTransactionScreen(initialType: 'income')),
+      ),
+      _ActionItem(
+        'Add Payment',
+        Icons.payments_rounded,
+        () => _navigate(const AddTransactionScreen(initialType: 'expense')),
+      ),
+      _ActionItem(
+        'Add Transfer',
+        Icons.swap_horiz_rounded,
+        () => _navigate(const AddTransactionScreen(initialType: 'transfer')),
+      ),
+      _ActionItem(
+        'Add Bill',
+        Icons.receipt_long_rounded,
+        () => _navigate(const AddBillScreen()),
+      ),
+      _ActionItem(
+        'Add Recurring Income',
+        Icons.repeat_rounded,
+        () => _navigate(const AddRecurringIncomeScreen()),
+      ),
     ];
 
     return LayoutBuilder(
@@ -2867,7 +2973,9 @@ class _FinanceActionGrid extends StatelessWidget {
             return SizedBox(
               width: itemWidth,
               child: Material(
-                color: isDark ? Colors.white.withOpacity(0.06) : Colors.grey.shade100,
+                color: isDark
+                    ? Colors.white.withOpacity(0.06)
+                    : Colors.grey.shade100,
                 borderRadius: BorderRadius.circular(14),
                 child: InkWell(
                   onTap: () {
@@ -2876,7 +2984,10 @@ class _FinanceActionGrid extends StatelessWidget {
                   },
                   borderRadius: BorderRadius.circular(14),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 14,
+                      horizontal: 12,
+                    ),
                     child: Row(
                       children: [
                         Container(

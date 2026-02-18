@@ -14,9 +14,12 @@ import '../../features/habits/data/repositories/habit_repository.dart';
 import '../../features/habits/presentation/widgets/habit_reminder_popup.dart';
 import '../../features/tasks/presentation/widgets/task_reminder_popup.dart';
 import '../../routing/app_router.dart';
+import '../notifications/models/notification_hub_modules.dart';
 import '../notifications/models/notification_hub_payload.dart';
 import '../notifications/notification_hub.dart';
 import '../notifications/services/notification_activity_logger.dart';
+import '../notifications/services/notification_flow_trace.dart';
+import '../notifications/services/notification_module_policy.dart';
 import '../models/notification_settings.dart';
 import 'notification_service.dart';
 
@@ -37,6 +40,12 @@ class NotificationHandler {
   static const String _pendingPayloadKey = 'pending_notification_payload';
   static const String _pendingActionKey = 'pending_notification_action';
   static const String _pendingIdKey = 'pending_notification_id';
+  static const String _pendingStoredAtKey =
+      'pending_notification_stored_at_ms_v1';
+  static const String _processedDeferredSignaturesKey =
+      'processed_deferred_notification_signatures_v1';
+  static const Duration _deferredReplayTtl = Duration(hours: 24);
+  static const Duration _maxDeferredAge = Duration(hours: 6);
 
   /// Load notification settings from SharedPreferences
   Future<NotificationSettings> _loadSettings() async {
@@ -102,7 +111,7 @@ class NotificationHandler {
       return await _systemChannel.invokeMethod<bool>('isDeviceLocked') ?? false;
     } catch (e) {
       debugPrint(
-        '⚠️ NotificationHandler: Failed to check device lock state: $e',
+        'NotificationHandler: WARNING: Failed to check device lock state: $e',
       );
       return false;
     }
@@ -122,8 +131,14 @@ class NotificationHandler {
       } else {
         await prefs.remove(_pendingIdKey);
       }
+      await prefs.setInt(
+        _pendingStoredAtKey,
+        DateTime.now().millisecondsSinceEpoch,
+      );
     } catch (e) {
-      debugPrint('⚠️ NotificationHandler: Failed to store pending payload: $e');
+      debugPrint(
+        'NotificationHandler: WARNING: Failed to store pending payload: $e',
+      );
     }
   }
 
@@ -141,15 +156,20 @@ class NotificationHandler {
       await prefs.remove(_pendingPayloadKey);
       final actionId = prefs.getString(_pendingActionKey) ?? '';
       final notificationId = prefs.getInt(_pendingIdKey);
+      final storedAtMs = prefs.getInt(_pendingStoredAtKey);
       await prefs.remove(_pendingActionKey);
       await prefs.remove(_pendingIdKey);
+      await prefs.remove(_pendingStoredAtKey);
       return {
         'payload': payload,
         'actionId': actionId,
         'notificationId': notificationId,
+        'storedAtMs': storedAtMs,
       };
     } catch (e) {
-      debugPrint('⚠️ NotificationHandler: Failed to read pending payload: $e');
+      debugPrint(
+        'NotificationHandler: WARNING: Failed to read pending payload: $e',
+      );
       return null;
     }
   }
@@ -161,7 +181,7 @@ class NotificationHandler {
 
     final isLocked = await _isDeviceLocked();
     if (isLocked) {
-      // Still locked → keep it pending.
+      // Still locked -> keep it pending.
       await _storePending(
         payload: pending['payload'] as String,
         actionId: pending['actionId'] as String?,
@@ -170,16 +190,88 @@ class NotificationHandler {
       return;
     }
 
-    debugPrint(
-      '🔓 NotificationHandler: Device unlocked, resuming deferred notification tap',
-    );
     final payload = pending['payload'] as String;
     final actionId = (pending['actionId'] as String?) ?? '';
     final notificationId = pending['notificationId'] as int?;
+    final storedAtMs = pending['storedAtMs'] as int?;
+    final parsed = NotificationHubPayload.tryParse(payload);
+
+    if (parsed != null) {
+      final policy = await NotificationModulePolicy.read(parsed.moduleId);
+      if (!policy.enabled) {
+        NotificationFlowTrace.log(
+          event: 'deferred_skip',
+          sourceFlow: 'deferred_unlock',
+          moduleId: parsed.moduleId,
+          entityId: parsed.entityId,
+          reason: policy.reason,
+        );
+        return;
+      }
+      final exists = await _entityStillExists(parsed.moduleId, parsed.entityId);
+      if (!exists) {
+        NotificationFlowTrace.log(
+          event: 'deferred_skip',
+          sourceFlow: 'deferred_unlock',
+          moduleId: parsed.moduleId,
+          entityId: parsed.entityId,
+          reason: 'entity_deleted',
+        );
+        return;
+      }
+    }
+
+    if (storedAtMs != null) {
+      final ageMs = DateTime.now().millisecondsSinceEpoch - storedAtMs;
+      if (ageMs > _maxDeferredAge.inMilliseconds) {
+        NotificationFlowTrace.log(
+          event: 'deferred_skip',
+          sourceFlow: 'deferred_unlock',
+          moduleId: parsed?.moduleId,
+          entityId: parsed?.entityId,
+          reason: 'deferred_stale',
+          details: <String, dynamic>{'ageMs': ageMs},
+        );
+        return;
+      }
+    }
+
+    final stillActive = await _isPendingNotificationStillActive(
+      payload: payload,
+      notificationId: notificationId,
+    );
+    if (!stillActive) {
+      NotificationFlowTrace.log(
+        event: 'deferred_skip',
+        sourceFlow: 'deferred_unlock',
+        moduleId: parsed?.moduleId,
+        entityId: parsed?.entityId,
+        reason: 'notification_inactive',
+      );
+      return;
+    }
+
+    final signature = _deferredSignature(payload, actionId, notificationId);
+    if (await _isDeferredReplay(signature)) {
+      NotificationFlowTrace.log(
+        event: 'deferred_skip',
+        sourceFlow: 'deferred_unlock',
+        moduleId: parsed?.moduleId,
+        entityId: parsed?.entityId,
+        reason: 'replay_detected',
+        notificationId: notificationId,
+      );
+      return;
+    }
+    await _markDeferredProcessed(signature);
+
+    debugPrint(
+      'NotificationHandler: Device unlocked, resuming deferred notification tap/action',
+    );
     if (actionId.isNotEmpty) {
       await _handleNotificationAction(actionId, payload, notificationId);
     } else {
-      await _handleNotificationTap(payload);
+      await _handleNotificationTap(payload, notificationId: notificationId);
     }
   }
 
@@ -189,29 +281,46 @@ class NotificationHandler {
     if (payload == null) return;
 
     debugPrint(
-      '📲 NotificationHandler: Handling notification with payload: $payload',
+      'NotificationHandler: Handling notification with payload: $payload',
     );
     debugPrint('   Action ID: ${response.actionId}');
     debugPrint('   Notification ID: ${response.id}');
 
-    // Check if this is an action button press
+    final isLocked = await _isDeviceLocked();
+
+    // Action button press.
     if (response.actionId != null && response.actionId!.isNotEmpty) {
+      if (isLocked) {
+        NotificationFlowTrace.log(
+          event: 'deferred_store',
+          sourceFlow: 'locked_response',
+          reason: 'device_locked_action',
+          notificationId: response.id,
+        );
+        await _storePending(
+          payload: payload,
+          actionId: response.actionId,
+          notificationId: response.id,
+        );
+        return;
+      }
       await _handleNotificationAction(response.actionId!, payload, response.id);
       return;
     }
 
-    // Otherwise, it's a tap on the notification - show popup
-    // SECURITY: If device is locked, never show app UI. Defer until unlocked.
-    final isLocked = await _isDeviceLocked();
+    // Tap on body.
     if (isLocked) {
-      debugPrint(
-        '🔒 NotificationHandler: Device is locked. Deferring notification tap.',
+      NotificationFlowTrace.log(
+        event: 'deferred_store',
+        sourceFlow: 'locked_response',
+        reason: 'device_locked_tap',
+        notificationId: response.id,
       );
-      await _storePending(payload: payload);
+      await _storePending(payload: payload, notificationId: response.id);
       return;
     }
 
-    await _handleNotificationTap(payload);
+    await _handleNotificationTap(payload, notificationId: response.id);
   }
 
   /// Handle notification action (Mark Done, Snooze, View, etc.)
@@ -224,18 +333,42 @@ class NotificationHandler {
     String payload,
     int? notificationId,
   ) async {
-    debugPrint('🔔 NotificationHandler: Processing action "$actionId"');
+    debugPrint('NotificationHandler: Processing action "$actionId"');
 
     final parsed = NotificationHubPayload.tryParse(payload);
     if (parsed == null) {
-      debugPrint('⚠️ NotificationHandler: Invalid payload format');
+      debugPrint('NotificationHandler: WARNING: Invalid payload format');
       return;
     }
 
     final moduleId = parsed.moduleId;
     final entityId = parsed.entityId;
+    final policy = await NotificationModulePolicy.read(moduleId);
+    if (!policy.enabled) {
+      NotificationFlowTrace.log(
+        event: 'notification_action_skip',
+        sourceFlow: 'notification_action',
+        moduleId: moduleId,
+        entityId: entityId,
+        reason: policy.reason,
+        notificationId: notificationId,
+      );
+      return;
+    }
+    final exists = await _entityStillExists(moduleId, entityId);
+    if (!exists) {
+      NotificationFlowTrace.log(
+        event: 'notification_action_skip',
+        sourceFlow: 'notification_action',
+        moduleId: moduleId,
+        entityId: entityId,
+        reason: 'entity_deleted',
+        notificationId: notificationId,
+      );
+      return;
+    }
 
-    // ── Snooze ──
+    // â”€â”€ Snooze â”€â”€
     if (actionId == 'snooze' || actionId.startsWith('snooze_')) {
       int? minutes;
       if (actionId.startsWith('snooze_')) {
@@ -260,18 +393,18 @@ class NotificationHandler {
         );
         if (snoozed) {
           debugPrint(
-            '✅ NotificationHandler: Hub notification snoozed for module "$moduleId"',
+            'NotificationHandler: Hub notification snoozed for module "$moduleId"',
           );
         } else {
           debugPrint(
-            '⚠️ NotificationHandler: Hub snooze failed for module "$moduleId"',
+            'NotificationHandler: WARNING: Hub snooze failed for module "$moduleId"',
           );
         }
       }
       return;
     }
 
-    // ── All other actions: route through Hub to module adapter ──
+    // â”€â”€ All other actions: route through Hub to module adapter â”€â”€
     final handledByHub = await NotificationHub().handleNotificationAction(
       actionId: actionId,
       payload: payload,
@@ -279,7 +412,7 @@ class NotificationHandler {
     );
     if (!handledByHub) {
       debugPrint(
-        '⚠️ NotificationHandler: No hub adapter handled "$actionId" for module "$moduleId"',
+        'NotificationHandler: WARNING: No hub adapter handled "$actionId" for module "$moduleId"',
       );
     }
   }
@@ -293,7 +426,7 @@ class NotificationHandler {
     int? notificationId, {
     int? overrideMinutes,
   }) async {
-    debugPrint('⏰ NotificationHandler: Snoozing $type $id from notification');
+    debugPrint('NotificationHandler: Snoozing $type $id from notification');
 
     try {
       HabitNotificationSettings? habitSettings;
@@ -311,7 +444,7 @@ class NotificationHandler {
       );
 
       debugPrint(
-        '⏰ Using snooze duration from settings: $snoozeDuration minutes',
+        'NotificationHandler: Using snooze duration from settings: $snoozeDuration minutes',
       );
 
       String title = 'Reminder';
@@ -365,7 +498,7 @@ class NotificationHandler {
           );
           await repository.updateHabit(updatedHabit);
           debugPrint(
-            '⏰ NotificationHandler: Habit snoozedUntil saved: $snoozedUntil (history=${history.length})',
+            'NotificationHandler: Habit snoozedUntil saved: $snoozedUntil (history=${history.length})',
           );
         }
       } else {
@@ -373,7 +506,9 @@ class NotificationHandler {
         try {
           final task = await repository.getTaskById(id);
           if (task == null) {
-            debugPrint('⚠️ NotificationHandler: Task not found for snooze');
+            debugPrint(
+              'NotificationHandler: WARNING: Task not found for snooze',
+            );
           } else {
             title = task.title;
             body = task.description ?? '';
@@ -414,12 +549,12 @@ class NotificationHandler {
             );
             await repository.updateTask(updatedTask);
             debugPrint(
-              '⏰ NotificationHandler: Task snoozedUntil saved: $snoozedUntil (history=${history.length})',
+              'NotificationHandler: Task snoozedUntil saved: $snoozedUntil (history=${history.length})',
             );
           }
         } catch (e) {
           debugPrint(
-            '⚠️ NotificationHandler: Failed to persist snooze state: $e',
+            'NotificationHandler: WARNING: Failed to persist snooze state: $e',
           );
         }
       }
@@ -439,68 +574,186 @@ class NotificationHandler {
       );
 
       // Inform the Hub about the snooze so it appears in the history log.
-      unawaited(NotificationActivityLogger().logSnoozed(
-        moduleId: type, // 'task' or 'habit'
-        entityId: id,
-        title: title,
-        body: body,
-        payload: payload,
-        snoozeDurationMinutes: snoozeDuration,
-      ));
+      unawaited(
+        NotificationActivityLogger().logSnoozed(
+          moduleId: type, // 'task' or 'habit'
+          entityId: id,
+          title: title,
+          body: body,
+          payload: payload,
+          snoozeDurationMinutes: snoozeDuration,
+        ),
+      );
 
-      debugPrint('⏰ NotificationHandler: Snoozed for $snoozeDuration minutes');
+      debugPrint('NotificationHandler: Snoozed for $snoozeDuration minutes');
     } catch (e, stack) {
-      debugPrint('⚠️ NotificationHandler: Error snoozing: $e');
+      debugPrint('NotificationHandler: WARNING: Error snoozing: $e');
       debugPrint('   Stack: $stack');
     }
   }
 
   /// Handle notification tap - show popup
-  Future<void> _handleNotificationTap(String payload) async {
-    // Parse payload (format: "type|id|reminderType|value|unit")
+  Future<void> _handleNotificationTap(
+    String payload, {
+    int? notificationId,
+  }) async {
+    final parsed = NotificationHubPayload.tryParse(payload);
+    final handledByHub = await NotificationHub().handleNotificationTap(
+      payload,
+      notificationId: notificationId,
+    );
+    if (handledByHub) {
+      return;
+    }
+
+    if (parsed != null) {
+      final policy = await NotificationModulePolicy.read(parsed.moduleId);
+      if (!policy.enabled) {
+        NotificationFlowTrace.log(
+          event: 'notification_tap_skip',
+          sourceFlow: 'notification_tap',
+          moduleId: parsed.moduleId,
+          entityId: parsed.entityId,
+          reason: policy.reason,
+          notificationId: notificationId,
+        );
+        return;
+      }
+
+      final exists = await _entityStillExists(parsed.moduleId, parsed.entityId);
+      if (!exists) {
+        NotificationFlowTrace.log(
+          event: 'notification_tap_skip',
+          sourceFlow: 'notification_tap',
+          moduleId: parsed.moduleId,
+          entityId: parsed.entityId,
+          reason: 'entity_deleted',
+          notificationId: notificationId,
+        );
+        return;
+      }
+
+      if (parsed.moduleId != NotificationHubModuleIds.task &&
+          parsed.moduleId != NotificationHubModuleIds.habit) {
+        return;
+      }
+    }
+
+    // Legacy fallback when no adapter handled tap for task/habit payloads.
     final parts = payload.split('|');
-    if (parts.length < 2) return;
+    final type = parsed?.moduleId ?? (parts.isNotEmpty ? parts.first : '');
+    final id = parsed?.entityId ?? (parts.length > 1 ? parts[1] : '');
+    if (type.isEmpty || id.isEmpty) return;
 
-    final type = parts[0]; // 'task' or 'habit'
-    final id = parts[1];
-
-    // Get the item from repository
     try {
       if (type == 'habit') {
         final habit = await _getHabitById(id);
         if (habit != null) {
-          unawaited(NotificationActivityLogger().logTapped(
-            moduleId: 'habit',
-            entityId: id,
-            title: habit.title,
-            body: '',
-          ));
+          unawaited(
+            NotificationActivityLogger().logTapped(
+              moduleId: 'habit',
+              entityId: id,
+              title: habit.title,
+              body: '',
+            ),
+          );
           _showHabitReminderPopup(habit);
         }
       } else if (type == 'task') {
         final task = await _getTaskById(id);
         if (task != null) {
-          unawaited(NotificationActivityLogger().logTapped(
-            moduleId: 'task',
-            entityId: id,
-            title: task.title,
-            body: '',
-          ));
-          _showReminderPopup(task);
-        }
-      } else {
-        final handledByHub = await NotificationHub().handleNotificationTap(
-          payload,
-        );
-        if (!handledByHub) {
-          debugPrint(
-            '⚠️ NotificationHandler: No hub adapter handled tap for module "$type"',
+          unawaited(
+            NotificationActivityLogger().logTapped(
+              moduleId: 'task',
+              entityId: id,
+              title: task.title,
+              body: '',
+            ),
           );
+          _showReminderPopup(task);
         }
       }
     } catch (e) {
-      debugPrint('⚠️ NotificationHandler: Error getting $type: $e');
+      debugPrint('NotificationHandler: Error getting $type: $e');
     }
+  }
+
+  String _deferredSignature(
+    String payload,
+    String actionId,
+    int? notificationId,
+  ) {
+    return '$payload|action:$actionId|id:${notificationId ?? -1}';
+  }
+
+  Future<Map<String, int>> _loadProcessedDeferredSignatures() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = (prefs.getString(_processedDeferredSignaturesKey) ?? '').trim();
+    if (raw.isEmpty) return <String, int>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return <String, int>{};
+      final map = <String, int>{};
+      decoded.forEach((k, v) {
+        if (k.isEmpty) return;
+        if (v is int) {
+          map[k] = v;
+        } else if (v is num) {
+          map[k] = v.toInt();
+        }
+      });
+      return map;
+    } catch (_) {
+      return <String, int>{};
+    }
+  }
+
+  Future<void> _saveProcessedDeferredSignatures(Map<String, int> map) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_processedDeferredSignaturesKey, jsonEncode(map));
+  }
+
+  Future<bool> _isDeferredReplay(String signature) async {
+    final map = await _loadProcessedDeferredSignatures();
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final ttlMs = _deferredReplayTtl.inMilliseconds;
+    map.removeWhere((_, ts) => nowMs - ts > ttlMs);
+    await _saveProcessedDeferredSignatures(map);
+    return map.containsKey(signature);
+  }
+
+  Future<void> _markDeferredProcessed(String signature) async {
+    final map = await _loadProcessedDeferredSignatures();
+    map[signature] = DateTime.now().millisecondsSinceEpoch;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final ttlMs = _deferredReplayTtl.inMilliseconds;
+    map.removeWhere((_, ts) => nowMs - ts > ttlMs);
+    await _saveProcessedDeferredSignatures(map);
+  }
+
+  Future<bool> _entityStillExists(String moduleId, String entityId) async {
+    if (entityId.isEmpty) return false;
+    if (moduleId == NotificationHubModuleIds.task) {
+      return (await TaskRepository().getTaskById(entityId)) != null;
+    }
+    if (moduleId == NotificationHubModuleIds.habit) {
+      return (await HabitRepository().getHabitById(entityId)) != null;
+    }
+    // Other modules use adapter-level validation.
+    return true;
+  }
+
+  Future<bool> _isPendingNotificationStillActive({
+    required String payload,
+    int? notificationId,
+  }) async {
+    final pending = await NotificationService()
+        .getDetailedPendingNotifications();
+    for (final info in pending) {
+      if (notificationId != null && info.id == notificationId) return true;
+      if ((info.payload ?? '') == payload) return true;
+    }
+    return false;
   }
 
   /// Get task by ID from repository
@@ -522,7 +775,7 @@ class NotificationHandler {
     final context = rootNavigatorKey.currentContext;
     if (context == null || !context.mounted) {
       debugPrint(
-        '⚠️ NotificationHandler: No context available yet, retrying...',
+        'NotificationHandler: WARNING: No context available yet, retrying...',
       );
       Future.delayed(
         const Duration(milliseconds: 500),
@@ -533,7 +786,7 @@ class NotificationHandler {
 
     void showPopup() {
       debugPrint(
-        '🔔 NotificationHandler: Showing reminder popup for "${task.title}"',
+        'NotificationHandler: Showing reminder popup for "${task.title}"',
       );
       TaskReminderPopup.show(context, task);
     }
@@ -558,7 +811,7 @@ class NotificationHandler {
 
     void showPopup() {
       debugPrint(
-        '🔔 NotificationHandler: Showing habit reminder popup for "${habit.title}"',
+        'NotificationHandler: Showing habit reminder popup for "${habit.title}"',
       );
       HabitReminderPopup.show(context, habit);
     }

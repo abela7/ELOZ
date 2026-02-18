@@ -3,7 +3,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/notifications/notifications.dart';
-import '../../../core/services/notification_service.dart';
+import '../../../core/services/reminder_manager.dart';
 import '../../../data/repositories/task_repository.dart';
 import '../../../routing/app_router.dart';
 import '../presentation/widgets/task_reminder_popup.dart';
@@ -75,11 +75,7 @@ class TaskNotificationAdapter implements MiniAppNotificationAdapter {
           pointsEarned: points,
         );
         await _taskRepository.updateTask(updated);
-        await NotificationService().cancelAllTaskReminders(taskId);
-        await NotificationHub().cancelForEntity(
-          moduleId: NotificationHubModuleIds.task,
-          entityId: taskId,
-        );
+        await ReminderManager().handleTaskCompleted(updated);
         return true;
       case 'view':
       case 'open':

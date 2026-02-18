@@ -3,7 +3,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/notifications/notifications.dart';
-import '../../../core/services/notification_service.dart';
+import '../../../core/services/reminder_manager.dart';
 import '../../../routing/app_router.dart';
 import '../data/models/habit_completion.dart';
 import '../data/repositories/habit_repository.dart';
@@ -68,11 +68,15 @@ class HabitNotificationAdapter implements MiniAppNotificationAdapter {
 
     switch (actionId) {
       case 'mark_done':
+      case 'done':
         final today = DateTime.now();
-        final todayCompletions =
-            await _habitRepository.getCompletionsForDate(habitId, today);
-        final alreadyCompleted =
-            todayCompletions.any((c) => !c.isSkipped && c.count > 0);
+        final todayCompletions = await _habitRepository.getCompletionsForDate(
+          habitId,
+          today,
+        );
+        final alreadyCompleted = todayCompletions.any(
+          (c) => !c.isSkipped && c.count > 0,
+        );
         if (alreadyCompleted) return true;
         final points = habit.isQuitHabit
             ? (habit.dailyReward ?? habit.customYesPoints ?? 10)
@@ -91,11 +95,7 @@ class HabitNotificationAdapter implements MiniAppNotificationAdapter {
           updateMoneySaved: habit.isQuitHabit,
           updateUnitsAvoided: habit.isQuitHabit,
         );
-        await NotificationService().cancelAllHabitReminders(habitId);
-        await NotificationHub().cancelForEntity(
-          moduleId: NotificationHubModuleIds.habit,
-          entityId: habitId,
-        );
+        await ReminderManager().cancelRemindersForHabit(habitId);
         return true;
       case 'skip':
         final today = DateTime.now();
@@ -110,11 +110,7 @@ class HabitNotificationAdapter implements MiniAppNotificationAdapter {
           pointsEarned: 0,
         );
         await _habitRepository.addCompletion(completion);
-        await NotificationService().cancelAllHabitReminders(habitId);
-        await NotificationHub().cancelForEntity(
-          moduleId: NotificationHubModuleIds.habit,
-          entityId: habitId,
-        );
+        await ReminderManager().cancelRemindersForHabit(habitId);
         return true;
       case 'view':
       case 'open':
@@ -139,8 +135,13 @@ class HabitNotificationAdapter implements MiniAppNotificationAdapter {
     if (habit == null) return {};
     final timeStr = habit.reminderMinutes != null
         ? DateFormat('h:mm a').format(
-            DateTime(2000, 1, 1,
-                habit.reminderMinutes! ~/ 60, habit.reminderMinutes! % 60),
+            DateTime(
+              2000,
+              1,
+              1,
+              habit.reminderMinutes! ~/ 60,
+              habit.reminderMinutes! % 60,
+            ),
           )
         : '';
     return {

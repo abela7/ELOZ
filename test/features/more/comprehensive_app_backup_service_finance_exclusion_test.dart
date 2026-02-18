@@ -84,6 +84,98 @@ void main() {
         ),
         isFalse,
       );
+      expect(
+        ComprehensiveAppBackupService.isFinanceHiveFileName(
+          'mbt_moods_v1.hive',
+        ),
+        isFalse,
+      );
+      expect(
+        ComprehensiveAppBackupService.isFinanceHiveFileName(
+          'mbt_mood_entries_v1.hive',
+        ),
+        isFalse,
+      );
+    });
+
+    test('filters finance-only preferences and keeps hub/shared keys', () {
+      expect(
+        ComprehensiveAppBackupService.isFinancePreferenceKeyName(
+          'notification_hub_module_settings_v1_finance',
+        ),
+        isTrue,
+      );
+      expect(
+        ComprehensiveAppBackupService.isFinancePreferenceKeyName(
+          'finance_passcode_recovery_only_mode',
+        ),
+        isTrue,
+      );
+      expect(
+        ComprehensiveAppBackupService.isFinancePreferenceKeyName(
+          'notification_hub_history_v1',
+        ),
+        isFalse,
+      );
+      expect(
+        ComprehensiveAppBackupService.isFinancePreferenceKeyName(
+          'tracked_native_alarms_v1',
+        ),
+        isFalse,
+      );
+      expect(
+        ComprehensiveAppBackupService.isFinancePreferenceKeyName(
+          'mbt_mood_reminder_enabled_v1',
+        ),
+        isFalse,
+      );
+      expect(
+        ComprehensiveAppBackupService.isFinancePreferenceKeyName(
+          'mbt_mood_reminder_hour_v1',
+        ),
+        isFalse,
+      );
+    });
+
+    test('filters finance secure-storage keys only', () {
+      expect(
+        ComprehensiveAppBackupService.isFinanceSecureStorageKeyName(
+          'finance_passcode_hash_v1',
+        ),
+        isTrue,
+      );
+      expect(
+        ComprehensiveAppBackupService.isFinanceSecureStorageKeyName(
+          'encryption_key_v1',
+        ),
+        isFalse,
+      );
+    });
+
+    test('sanitizes and merges hub enabled states for finance-safe restore', () {
+      final sanitized =
+          ComprehensiveAppBackupService.sanitizeHubEnabledStatesJsonForBackup(
+            '{"task":true,"habit":false,"finance":true}',
+          );
+      expect(sanitized.contains('"finance"'), isFalse);
+      expect(sanitized.contains('"task"'), isTrue);
+      expect(sanitized.contains('"habit"'), isTrue);
+
+      final merged =
+          ComprehensiveAppBackupService.mergeHubEnabledStatesJsonWithPreservedFinance(
+            '{"task":false,"habit":true}',
+            false,
+          );
+      expect(merged.contains('"finance":false'), isTrue);
+      expect(merged.contains('"task":false'), isTrue);
+      expect(merged.contains('"habit":true'), isTrue);
+
+      final mergedFallback =
+          ComprehensiveAppBackupService.mergeHubEnabledStatesJsonWithPreservedFinance(
+            'not-json',
+            true,
+          );
+      expect(mergedFallback.contains('"finance":true'), isTrue);
     });
   });
 }

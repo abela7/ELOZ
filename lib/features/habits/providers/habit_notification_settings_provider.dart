@@ -5,19 +5,26 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/notifications/models/notification_hub_modules.dart';
+import '../../../core/notifications/notification_hub.dart';
 import '../../../core/services/android_system_status.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/theme/color_schemes.dart';
 import '../data/models/habit_notification_settings.dart';
 import '../services/habit_reminder_service.dart';
 
-final habitNotificationSettingsProvider = StateNotifierProvider<
-    HabitNotificationSettingsNotifier, HabitNotificationSettings>((ref) {
-  return HabitNotificationSettingsNotifier();
-});
+final habitNotificationSettingsProvider =
+    StateNotifierProvider<
+      HabitNotificationSettingsNotifier,
+      HabitNotificationSettings
+    >((ref) {
+      return HabitNotificationSettingsNotifier();
+    });
 
-class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationSettings> {
-  HabitNotificationSettingsNotifier() : super(HabitNotificationSettings.defaults) {
+class HabitNotificationSettingsNotifier
+    extends StateNotifier<HabitNotificationSettings> {
+  HabitNotificationSettingsNotifier()
+    : super(HabitNotificationSettings.defaults) {
     _loadSettings();
   }
 
@@ -30,6 +37,8 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
     if (jsonString != null) {
       state = HabitNotificationSettings.fromJsonString(jsonString);
     }
+    // Hub module settings are authoritative for habit module enablement.
+    await _syncHabitToggleFromHubAuthority();
     await refreshPermissionStates();
   }
 
@@ -62,14 +71,18 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
         final notificationStatus = await Permission.notification.status;
         hasNotificationPermission = notificationStatus.isGranted;
       } catch (e) {
-        print('⚠️ HabitNotificationSettingsProvider: Error checking notification permission: $e');
+        print(
+          '⚠️ HabitNotificationSettingsProvider: Error checking notification permission: $e',
+        );
       }
 
       try {
         final exactAlarmStatus = await Permission.scheduleExactAlarm.status;
         hasExactAlarmPermission = exactAlarmStatus.isGranted;
       } catch (e) {
-        print('⚠️ HabitNotificationSettingsProvider: Error checking exact alarm permission: $e');
+        print(
+          '⚠️ HabitNotificationSettingsProvider: Error checking exact alarm permission: $e',
+        );
         hasExactAlarmPermission = true;
       }
 
@@ -77,24 +90,32 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
         final overlayStatus = await Permission.systemAlertWindow.status;
         hasOverlayPermission = overlayStatus.isGranted;
       } catch (e) {
-        print('⚠️ HabitNotificationSettingsProvider: Error checking overlay permission: $e');
+        print(
+          '⚠️ HabitNotificationSettingsProvider: Error checking overlay permission: $e',
+        );
       }
 
       try {
         final battery = await AndroidSystemStatus.getBatteryStatus();
-        final isBackgroundRestricted = battery['isBackgroundRestricted'] as bool? ?? false;
+        final isBackgroundRestricted =
+            battery['isBackgroundRestricted'] as bool? ?? false;
         final isIgnoringBatteryOptimizations =
             battery['isIgnoringBatteryOptimizations'] as bool? ?? false;
         hasBatteryOptimizationExemption =
             isIgnoringBatteryOptimizations && !isBackgroundRestricted;
       } catch (e) {
-        print('⚠️ HabitNotificationSettingsProvider: Error checking battery status: $e');
+        print(
+          '⚠️ HabitNotificationSettingsProvider: Error checking battery status: $e',
+        );
       }
 
       try {
-        hasFullScreenIntentPermission = await AndroidSystemStatus.canUseFullScreenIntent();
+        hasFullScreenIntentPermission =
+            await AndroidSystemStatus.canUseFullScreenIntent();
       } catch (e) {
-        print('⚠️ HabitNotificationSettingsProvider: Error checking full screen intent: $e');
+        print(
+          '⚠️ HabitNotificationSettingsProvider: Error checking full screen intent: $e',
+        );
         hasFullScreenIntentPermission = true;
       }
     } else if (Platform.isIOS) {
@@ -102,7 +123,9 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
         final notificationStatus = await Permission.notification.status;
         hasNotificationPermission = notificationStatus.isGranted;
       } catch (e) {
-        print('⚠️ HabitNotificationSettingsProvider: Error checking iOS notification permission: $e');
+        print(
+          '⚠️ HabitNotificationSettingsProvider: Error checking iOS notification permission: $e',
+        );
       }
       hasExactAlarmPermission = true;
       hasFullScreenIntentPermission = true;
@@ -132,7 +155,8 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
     if (Platform.isAndroid) {
       final androidPlugin = _notificationsPlugin
           .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>();
+            AndroidFlutterLocalNotificationsPlugin
+          >();
       if (androidPlugin != null) {
         final granted = await androidPlugin.requestExactAlarmsPermission();
         await refreshPermissionStates();
@@ -152,8 +176,12 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
         await refreshPermissionStates();
         return state.hasBatteryOptimizationExemption;
       } catch (e) {
-        print('⚠️ HabitNotificationSettingsProvider: Error requesting battery optimization: $e');
-        await AppSettings.openAppSettings(type: AppSettingsType.batteryOptimization);
+        print(
+          '⚠️ HabitNotificationSettingsProvider: Error requesting battery optimization: $e',
+        );
+        await AppSettings.openAppSettings(
+          type: AppSettingsType.batteryOptimization,
+        );
         await refreshPermissionStates();
         return false;
       }
@@ -165,7 +193,9 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
     try {
       await AppSettings.openAppSettings(type: AppSettingsType.notification);
     } catch (e) {
-      print('⚠️ HabitNotificationSettingsProvider: Error opening notification settings: $e');
+      print(
+        '⚠️ HabitNotificationSettingsProvider: Error opening notification settings: $e',
+      );
       await AppSettings.openAppSettings();
     }
   }
@@ -174,15 +204,21 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
     try {
       await AppSettings.openAppSettings();
     } catch (e) {
-      print('⚠️ HabitNotificationSettingsProvider: Error opening app settings: $e');
+      print(
+        '⚠️ HabitNotificationSettingsProvider: Error opening app settings: $e',
+      );
     }
   }
 
   Future<void> openBatteryOptimizationSettings() async {
     try {
-      await AppSettings.openAppSettings(type: AppSettingsType.batteryOptimization);
+      await AppSettings.openAppSettings(
+        type: AppSettingsType.batteryOptimization,
+      );
     } catch (e) {
-      print('⚠️ HabitNotificationSettingsProvider: Error opening battery settings: $e');
+      print(
+        '⚠️ HabitNotificationSettingsProvider: Error opening battery settings: $e',
+      );
       await AppSettings.openAppSettings();
     }
   }
@@ -197,7 +233,9 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
 
   Future<void> openChannelSettings(String channelId) async {
     if (Platform.isAndroid) {
-      final resolved = await NotificationService().resolveAndroidChannelId(channelId);
+      final resolved = await NotificationService().resolveAndroidChannelId(
+        channelId,
+      );
       await AndroidSystemStatus.openChannelSettings(resolved);
     } else {
       await openNotificationSettings();
@@ -216,7 +254,9 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
     if (!Platform.isAndroid) return;
 
     final lower = state.defaultSound.toLowerCase();
-    final currentUri = lower.startsWith('content://') ? state.defaultSound : null;
+    final currentUri = lower.startsWith('content://')
+        ? state.defaultSound
+        : null;
 
     final picked = await AndroidSystemStatus.pickNotificationSound(
       currentUri: currentUri,
@@ -251,6 +291,10 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
   }
 
   Future<void> setNotificationsEnabled(bool enabled) async {
+    final appliedToHub = await _setHabitModuleToggleInHub(enabled);
+    if (!appliedToHub) {
+      return;
+    }
     state = state.copyWith(notificationsEnabled: enabled);
     await _saveSettings();
   }
@@ -447,7 +491,12 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
   }
 
   Future<void> setRollingWindowDays(int days) async {
-    final safeDays = days < 1 ? HabitNotificationSettings.defaults.rollingWindowDays : days;
+    final safeDays = days
+        .clamp(
+          HabitNotificationSettings.minRollingWindowDays,
+          HabitNotificationSettings.maxRollingWindowDays,
+        )
+        .toInt();
     state = state.copyWith(rollingWindowDays: safeDays);
     await _saveSettings();
   }
@@ -462,7 +511,8 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
       state.hasOverlayPermission &&
       state.hasBatteryOptimizationExemption;
 
-  bool get hasAllTrackedPermissions => hasAllCriticalPermissions && hasAllOptionalPermissions;
+  bool get hasAllTrackedPermissions =>
+      hasAllCriticalPermissions && hasAllOptionalPermissions;
 
   String get permissionStatusSummary {
     if (hasAllTrackedPermissions) {
@@ -507,4 +557,40 @@ class HabitNotificationSettingsNotifier extends StateNotifier<HabitNotificationS
   }
 
   int get totalPermissionCount => Platform.isAndroid ? 5 : 1;
+
+  Future<bool> _setHabitModuleToggleInHub(bool enabled) async {
+    try {
+      final hub = NotificationHub();
+      await hub.initialize();
+      final current = await hub.getModuleSettings(
+        NotificationHubModuleIds.habit,
+      );
+      await hub.setModuleSettings(
+        NotificationHubModuleIds.habit,
+        current.copyWith(notificationsEnabled: enabled),
+      );
+      return true;
+    } catch (_) {
+      // Hub is authoritative; if this fails we do not apply local divergence.
+      return false;
+    }
+  }
+
+  Future<void> _syncHabitToggleFromHubAuthority() async {
+    try {
+      final hub = NotificationHub();
+      await hub.initialize();
+      final moduleSettings = await hub.getModuleSettings(
+        NotificationHubModuleIds.habit,
+      );
+      final hubEnabled = moduleSettings.notificationsEnabled;
+      if (hubEnabled == null || state.notificationsEnabled == hubEnabled) {
+        return;
+      }
+      state = state.copyWith(notificationsEnabled: hubEnabled);
+      await _saveSettings();
+    } catch (_) {
+      // Keep local state when hub is unavailable; next successful read re-syncs.
+    }
+  }
 }

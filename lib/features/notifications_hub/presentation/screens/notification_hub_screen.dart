@@ -107,7 +107,9 @@ class _NotificationHubScreenState extends State<NotificationHubScreen>
             fontWeight: FontWeight.w500,
             fontSize: 14,
           ),
-          dividerColor: colorScheme.outlineVariant.withOpacity(isDark ? 0.2 : 0.3),
+          dividerColor: colorScheme.outlineVariant.withValues(
+            alpha: isDark ? 0.2 : 0.3,
+          ),
           tabs: const [
             Tab(text: 'Overview'),
             Tab(text: 'Settings'),
@@ -124,7 +126,11 @@ class _NotificationHubScreenState extends State<NotificationHubScreen>
             onNavigateToPermissions: () {
               _goToTab(1);
               WidgetsBinding.instance.addPostFrameCallback((_) {
-                _push(context, 'Permissions & Health', const HubPermissionsPage());
+                _push(
+                  context,
+                  'Permissions & Health',
+                  const HubPermissionsPage(),
+                );
               });
             },
           ),
@@ -167,22 +173,16 @@ class _SettingsTab extends StatelessWidget {
           title: 'Global Settings',
           subtitle: 'Master toggle, sound, vibration, snooze, display',
           color: AppColorSchemes.primaryGold,
-          onTap: () => onPush(
-            context,
-            'Global Settings',
-            const HubGlobalSettingsPage(),
-          ),
+          onTap: () =>
+              onPush(context, 'Global Settings', const HubGlobalSettingsPage()),
         ),
         _SettingsNavCard(
           icon: Icons.nights_stay_rounded,
           title: 'Quiet Hours',
           subtitle: 'Schedule silent periods & exceptions',
           color: Colors.indigo,
-          onTap: () => onPush(
-            context,
-            'Quiet Hours',
-            const HubQuietHoursPage(),
-          ),
+          onTap: () =>
+              onPush(context, 'Quiet Hours', const HubQuietHoursPage()),
         ),
         _SettingsNavCard(
           icon: Icons.link_off_rounded,
@@ -209,7 +209,8 @@ class _SettingsTab extends StatelessWidget {
         _SettingsNavCard(
           icon: Icons.restart_alt_rounded,
           title: 'Reset Notification Hub',
-          subtitle: 'Wipe history log and/or full reset (definitions + alarms) – brand new hub',
+          subtitle:
+              'Wipe history log and/or full reset (definitions + alarms) – brand new hub',
           color: Colors.red.shade400,
           onTap: () => onPush(
             context,
@@ -246,8 +247,9 @@ class _SettingsNavCard extends StatelessWidget {
     final containerColor = isDark
         ? theme.colorScheme.surfaceContainerLow
         : theme.colorScheme.surfaceContainerHighest;
-    final borderColor =
-        theme.colorScheme.outlineVariant.withOpacity(isDark ? 0.4 : 0.6);
+    final borderColor = theme.colorScheme.outlineVariant.withValues(
+      alpha: isDark ? 0.4 : 0.6,
+    );
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -272,7 +274,7 @@ class _SettingsNavCard extends StatelessWidget {
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.15),
+                    color: color.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(icon, color: color, size: 24),
@@ -305,7 +307,9 @@ class _SettingsNavCard extends StatelessWidget {
                 Icon(
                   Icons.arrow_forward_ios_rounded,
                   size: 14,
-                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                  color: theme.colorScheme.onSurfaceVariant.withValues(
+                    alpha: 0.5,
+                  ),
                 ),
               ],
             ),
@@ -323,8 +327,11 @@ class _SubPage extends StatelessWidget {
   final Widget child;
   final bool isDark;
 
-  const _SubPage(
-      {required this.title, required this.isDark, required this.child});
+  const _SubPage({
+    required this.title,
+    required this.isDark,
+    required this.child,
+  });
 
   @override
   Widget build(BuildContext context) {

@@ -47,7 +47,6 @@ dependencies:
   go_router: ^13.0.0
 
   # UI
-  google_fonts: ^6.1.0
 
   # Security
   flutter_secure_storage: ^9.0.0
@@ -64,6 +63,9 @@ dependencies:
 
   # Icons
   font_awesome_flutter: ^10.6.0
+
+  # Emoji picker (lazy-loaded for performance)
+  emoji_picker_flutter: ^4.4.0
 
   # Utils
   uuid: ^4.2.1
@@ -133,6 +135,7 @@ flutter:
   assets:
     - assets/animations/
     - assets/sounds/
+    - assets/fonts/inter/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
@@ -145,17 +148,12 @@ flutter:
   # "family" key with the font family name, and a "fonts" key with a
   # list giving the asset and other descriptors for the font. For
   # example:
-  # fonts:
-  #   - family: Schyler
-  #     fonts:
-  #       - asset: fonts/Schyler-Regular.ttf
-  #       - asset: fonts/Schyler-Italic.ttf
-  #         style: italic
-  #   - family: Trajan Pro
-  #     fonts:
-  #       - asset: fonts/TrajanPro.ttf
-  #       - asset: fonts/TrajanPro_Bold.ttf
-  #         weight: 700
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/inter/Inter-Variable.ttf
+        - asset: assets/fonts/inter/Inter-Italic-Variable.ttf
+          style: italic
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package

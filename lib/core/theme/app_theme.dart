@@ -1,37 +1,55 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import '../utils/perf_trace.dart';
 import 'color_schemes.dart';
 import 'widgets_theme.dart';
 
 /// Main theme configuration following official design rules
 class AppTheme {
-  /// Light Theme
-  static ThemeData lightTheme() {
-    final colorScheme = AppColorSchemes.lightColorScheme;
+  static final ThemeData light = _buildLightTheme();
+  static final ThemeData dark = _buildDarkTheme();
 
-    return ThemeData(
+  /// Light Theme
+  static ThemeData lightTheme() => light;
+
+  /// Dark Theme - Premium purple and gold
+  static ThemeData darkTheme() => dark;
+
+  static ThemeData _buildLightTheme() {
+    final stopwatch = Stopwatch()..start();
+    final colorScheme = AppColorSchemes.lightColorScheme;
+    final baseTextTheme = ThemeData.light().textTheme;
+
+    final theme = ThemeData(
       useMaterial3: true,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: AppColorSchemes.background,
-      
-      // Typography - Inter font
-      textTheme: GoogleFonts.interTextTheme().apply(
+
+      // Typography - Inter asset font.
+      textTheme: baseTextTheme.apply(
+        fontFamily: 'Inter',
         bodyColor: AppColorSchemes.textPrimary,
         displayColor: AppColorSchemes.textPrimary,
       ),
-      
+
       // Component Themes
       elevatedButtonTheme: AppWidgetsTheme.elevatedButtonTheme(colorScheme),
       cardTheme: AppWidgetsTheme.cardTheme(colorScheme),
-      bottomNavigationBarTheme: AppWidgetsTheme.bottomNavigationBarTheme(colorScheme),
+      bottomNavigationBarTheme: AppWidgetsTheme.bottomNavigationBarTheme(
+        colorScheme,
+      ),
       appBarTheme: AppWidgetsTheme.appBarTheme(colorScheme),
-      floatingActionButtonTheme: AppWidgetsTheme.floatingActionButtonTheme(colorScheme),
-      
+      floatingActionButtonTheme: AppWidgetsTheme.floatingActionButtonTheme(
+        colorScheme,
+      ),
+
       // Input Decoration Theme
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: AppColorSchemes.surface,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 14,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide(color: colorScheme.outline),
@@ -42,39 +60,57 @@ class AppTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: AppColorSchemes.primaryGold, width: 2),
+          borderSide: const BorderSide(
+            color: AppColorSchemes.primaryGold,
+            width: 2,
+          ),
         ),
       ),
     );
+    stopwatch.stop();
+    PerfTrace.log(
+      'ThemeBuild',
+      'light_constructed',
+      details: {'durationUs': stopwatch.elapsedMicroseconds},
+    );
+    return theme;
   }
 
-  /// Dark Theme - Premium purple and gold
-  static ThemeData darkTheme() {
+  static ThemeData _buildDarkTheme() {
+    final stopwatch = Stopwatch()..start();
     final colorScheme = AppColorSchemes.darkColorScheme;
+    final baseTextTheme = ThemeData.dark().textTheme;
 
-    return ThemeData(
+    final theme = ThemeData(
       useMaterial3: true,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: const Color(0xFF212529), // Dark gray background
-      
-      // Typography - Inter font with light text
-      textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme).apply(
+      // Typography - Inter asset font with light text.
+      textTheme: baseTextTheme.apply(
+        fontFamily: 'Inter',
         bodyColor: const Color(0xFFE5E5E5), // Light text for dark bg
         displayColor: const Color(0xFFFFFFFF), // White for headers
       ),
-      
+
       // Component Themes
       elevatedButtonTheme: _darkElevatedButtonTheme(colorScheme),
       cardTheme: _darkCardTheme(colorScheme),
-      bottomNavigationBarTheme: AppWidgetsTheme.bottomNavigationBarTheme(colorScheme),
+      bottomNavigationBarTheme: AppWidgetsTheme.bottomNavigationBarTheme(
+        colorScheme,
+      ),
       appBarTheme: _darkAppBarTheme(colorScheme),
-      floatingActionButtonTheme: AppWidgetsTheme.floatingActionButtonTheme(colorScheme),
-      
+      floatingActionButtonTheme: AppWidgetsTheme.floatingActionButtonTheme(
+        colorScheme,
+      ),
+
       // Input Decoration Theme
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: const Color(0xFF2D3139), // Dark gray for inputs
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 14,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide(color: colorScheme.outline),
@@ -85,23 +121,33 @@ class AppTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: AppColorSchemes.primaryGold, width: 2),
+          borderSide: const BorderSide(
+            color: AppColorSchemes.primaryGold,
+            width: 2,
+          ),
         ),
         hintStyle: const TextStyle(color: Color(0xFF9E9E9E)),
         labelStyle: const TextStyle(color: Color(0xFFBDBDBD)),
       ),
     );
+    stopwatch.stop();
+    PerfTrace.log(
+      'ThemeBuild',
+      'dark_constructed',
+      details: {'durationUs': stopwatch.elapsedMicroseconds},
+    );
+    return theme;
   }
 
   /// Dark theme elevated button
-  static ElevatedButtonThemeData _darkElevatedButtonTheme(ColorScheme colorScheme) {
+  static ElevatedButtonThemeData _darkElevatedButtonTheme(
+    ColorScheme colorScheme,
+  ) {
     return ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         elevation: 0,
         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         backgroundColor: AppColorSchemes.primaryGold,
         foregroundColor: const Color(0xFF1E1E1E), // Dark text on gold
         textStyle: const TextStyle(
@@ -117,9 +163,7 @@ class AppTheme {
   static CardThemeData _darkCardTheme(ColorScheme colorScheme) {
     return CardThemeData(
       elevation: 3,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       color: const Color(0xFF2D3139), // Dark gray per design rules (NO PURPLE!)
       margin: const EdgeInsets.all(16),
       clipBehavior: Clip.antiAlias,
@@ -141,10 +185,7 @@ class AppTheme {
         letterSpacing: -0.5,
         color: Color(0xFFFFFFFF),
       ),
-      iconTheme: const IconThemeData(
-        color: Color(0xFFE5E5E5),
-        size: 24,
-      ),
+      iconTheme: const IconThemeData(color: Color(0xFFE5E5E5), size: 24),
       toolbarHeight: 56,
     );
   }

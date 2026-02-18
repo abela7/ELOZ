@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/color_schemes.dart';
 import '../../../../core/services/notification_service.dart';
+import '../../../../core/services/reminder_manager.dart';
 import '../../../../core/providers/notification_settings_provider.dart';
 import '../../../../data/models/task.dart';
 import '../../../../data/models/subtask.dart';
@@ -637,7 +638,7 @@ class _TaskReminderPopupState extends ConsumerState<TaskReminderPopup>
 
     try {
       await ref.read(taskNotifierProvider.notifier).completeTask(widget.task.id);
-      await NotificationService().cancelAllTaskReminders(widget.task.id);
+      await ReminderManager().cancelRemindersForTask(widget.task.id);
 
       if (mounted) {
         Navigator.pop(context);
@@ -770,7 +771,7 @@ class _TaskReminderPopupState extends ConsumerState<TaskReminderPopup>
       
       try {
         await ref.read(taskNotifierProvider.notifier).markNotDone(_task.id, reason);
-        await NotificationService().cancelAllTaskReminders(_task.id);
+        await ReminderManager().cancelRemindersForTask(_task.id);
         _showSuccessSnackbar('Task marked as not done', const Color(0xFFE57373));
       } catch (e) {
         _showErrorSnackbar('Failed to update task');
@@ -824,7 +825,7 @@ class _TaskReminderPopupState extends ConsumerState<TaskReminderPopup>
           reason,
           penalty: penalty,
         );
-        await NotificationService().cancelAllTaskReminders(widget.task.id);
+        await ReminderManager().cancelRemindersForTask(widget.task.id);
         _showSuccessSnackbar('Task moved to ${_formatDate(newDate)}', const Color(0xFFFFB347));
       }
     }

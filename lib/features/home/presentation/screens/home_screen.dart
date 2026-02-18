@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../../data/models/task.dart';
 import '../../../../main.dart';
+import '../../../../core/utils/theme_toggle_profiler.dart';
 import '../../../tasks/presentation/providers/task_providers.dart';
 import '../../../tasks/presentation/screens/add_task_screen.dart';
 import '../../../tasks/presentation/screens/task_settings_screen.dart';
@@ -20,12 +21,16 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final themeMode = ref.watch(themeModeProvider);
-    
+
     // Watch task stats for today
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
     final tasksAsync = ref.watch(tasksForDateProvider(today));
     final postponedAsync = ref.watch(tasksPostponedFromDateProvider(today));
-    
+
     final taskStats = tasksAsync.when(
       data: (tasks) => postponedAsync.when(
         data: (postponed) => {
@@ -45,32 +50,41 @@ class HomeScreen extends ConsumerWidget {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: isDark 
-              ? [
-                  const Color(0xFF2A2D3A), // Top - Dark blue-gray
-                  const Color(0xFF212529), // Middle - Charcoal
-                  const Color(0xFF1A1D23), // Bottom - Almost black
-                ]
-              : [
-                  const Color(0xFFF9F7F2),
-                  const Color(0xFFEDE9E0),
-                ],
+            colors: isDark
+                ? [
+                    const Color(0xFF2A2D3A), // Top - Dark blue-gray
+                    const Color(0xFF212529), // Middle - Charcoal
+                    const Color(0xFF1A1D23), // Bottom - Almost black
+                  ]
+                : [const Color(0xFFF9F7F2), const Color(0xFFEDE9E0)],
           ),
         ),
         // Add subtle noise texture overlay for dark mode
         child: isDark
-          ? Container(
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.02), // 2% noise effect
-              ),
-              child: _buildContent(context, ref, isDark, themeMode, taskStats),
-            )
-          : _buildContent(context, ref, isDark, themeMode, taskStats),
+            ? Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.02), // 2% noise effect
+                ),
+                child: _buildContent(
+                  context,
+                  ref,
+                  isDark,
+                  themeMode,
+                  taskStats,
+                ),
+              )
+            : _buildContent(context, ref, isDark, themeMode, taskStats),
       ),
     );
   }
 
-  Widget _buildContent(BuildContext context, WidgetRef ref, bool isDark, ThemeMode themeMode, Map<String, int> taskStats) {
+  Widget _buildContent(
+    BuildContext context,
+    WidgetRef ref,
+    bool isDark,
+    ThemeMode themeMode,
+    Map<String, int> taskStats,
+  ) {
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.only(bottom: 100), // Space for bottom nav
@@ -89,14 +103,15 @@ class HomeScreen extends ConsumerWidget {
                     children: [
                       Text(
                         'Hey Abela! 👋',
-                        style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                          fontSize: 32,
-                          fontWeight: FontWeight.w700,
-                          color: isDark 
-                            ? const Color(0xFFFFFFFF)
-                            : const Color(0xFF1E1E1E),
-                          letterSpacing: -0.5,
-                        ),
+                        style: Theme.of(context).textTheme.headlineLarge
+                            ?.copyWith(
+                              fontSize: 32,
+                              fontWeight: FontWeight.w700,
+                              color: isDark
+                                  ? const Color(0xFFFFFFFF)
+                                  : const Color(0xFF1E1E1E),
+                              letterSpacing: -0.5,
+                            ),
                       ),
                       const SizedBox(height: 8),
                       Text(
@@ -104,20 +119,20 @@ class HomeScreen extends ConsumerWidget {
                         style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                           fontSize: 16,
                           color: isDark
-                            ? const Color(0xFFBDBDBD)
-                            : const Color(0xFF6E6E6E),
+                              ? const Color(0xFFBDBDBD)
+                              : const Color(0xFF6E6E6E),
                         ),
                       ),
                     ],
                   ),
                 ),
-                
+
                 // Theme Toggle Button
                 Container(
                   decoration: BoxDecoration(
                     color: isDark
-                      ? const Color(0xFF2D3139) // Dark gray
-                      : const Color(0xFFFFFFFF),
+                        ? const Color(0xFF2D3139) // Dark gray
+                        : const Color(0xFFFFFFFF),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
                       color: const Color(0xFFCDAF56),
@@ -135,11 +150,15 @@ class HomeScreen extends ConsumerWidget {
                     color: Colors.transparent,
                     child: InkWell(
                       onTap: () {
-                        // Toggle theme
-                        ref.read(themeModeProvider.notifier).state = 
-                          themeMode == ThemeMode.dark
+                        final nextMode = themeMode == ThemeMode.dark
                             ? ThemeMode.light
                             : ThemeMode.dark;
+                        final toggleId = ThemeToggleProfiler.startToggle(
+                          from: themeMode,
+                          to: nextMode,
+                        );
+                        ThemeToggleProfiler.markProviderWrite(toggleId);
+                        ref.read(themeModeProvider.notifier).state = nextMode;
                       },
                       borderRadius: BorderRadius.circular(12),
                       splashColor: const Color(0xFFCDAF56).withOpacity(0.2),
@@ -147,8 +166,8 @@ class HomeScreen extends ConsumerWidget {
                         padding: const EdgeInsets.all(12),
                         child: Icon(
                           themeMode == ThemeMode.dark
-                            ? Icons.light_mode_rounded
-                            : Icons.dark_mode_rounded,
+                              ? Icons.light_mode_rounded
+                              : Icons.dark_mode_rounded,
                           color: const Color(0xFFCDAF56),
                           size: 24,
                         ),
@@ -168,15 +187,15 @@ class HomeScreen extends ConsumerWidget {
             child: Container(
               decoration: BoxDecoration(
                 color: isDark
-                  ? const Color(0xFF2D3139) // Dark gray card
-                  : const Color(0xFFFFFFFF),
+                    ? const Color(0xFF2D3139) // Dark gray card
+                    : const Color(0xFFFFFFFF),
                 borderRadius: BorderRadius.circular(20),
                 border: isDark
-                  ? Border.all(
-                      color: const Color(0xFF3E4148).withOpacity(0.5),
-                      width: 1,
-                    )
-                  : null,
+                    ? Border.all(
+                        color: const Color(0xFF3E4148).withOpacity(0.5),
+                        width: 1,
+                      )
+                    : null,
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withOpacity(isDark ? 0.3 : 0.05),
@@ -195,8 +214,8 @@ class HomeScreen extends ConsumerWidget {
                       fontSize: 20,
                       fontWeight: FontWeight.w600,
                       color: isDark
-                        ? const Color(0xFFFFFFFF)
-                        : const Color(0xFF1E1E1E),
+                          ? const Color(0xFFFFFFFF)
+                          : const Color(0xFF1E1E1E),
                     ),
                   ),
                   const SizedBox(height: 24),
@@ -206,15 +225,16 @@ class HomeScreen extends ConsumerWidget {
                       _StatItem(
                         icon: Icons.task_alt_rounded,
                         label: 'Tasks',
-                        value: '${taskStats['completed']}/${taskStats['total']}',
+                        value:
+                            '${taskStats['completed']}/${taskStats['total']}',
                         isDark: isDark,
                       ),
                       Container(
                         width: 1,
                         height: 40,
                         color: isDark
-                          ? const Color(0xFF3E4148)
-                          : const Color(0xFFEDE9E0),
+                            ? const Color(0xFF3E4148)
+                            : const Color(0xFFEDE9E0),
                       ),
                       _StatItem(
                         icon: Icons.auto_awesome_rounded,
@@ -226,8 +246,8 @@ class HomeScreen extends ConsumerWidget {
                         width: 1,
                         height: 40,
                         color: isDark
-                          ? const Color(0xFF3E4148)
-                          : const Color(0xFFEDE9E0),
+                            ? const Color(0xFF3E4148)
+                            : const Color(0xFFEDE9E0),
                       ),
                       _StatItem(
                         icon: Icons.mood_rounded,
@@ -264,12 +284,12 @@ class HomeScreen extends ConsumerWidget {
                     fontSize: 20,
                     fontWeight: FontWeight.w600,
                     color: isDark
-                      ? const Color(0xFFFFFFFF)
-                      : const Color(0xFF1E1E1E),
+                        ? const Color(0xFFFFFFFF)
+                        : const Color(0xFF1E1E1E),
                   ),
                 ),
                 const SizedBox(height: 16),
-                
+
                 // Row 1
                 Row(
                   children: [
@@ -293,7 +313,7 @@ class HomeScreen extends ConsumerWidget {
                   ],
                 ),
                 const SizedBox(height: 12),
-                
+
                 // Row 2
                 Row(
                   children: [
@@ -354,7 +374,9 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
 
     return Container(
       decoration: BoxDecoration(
-        color: widget.isDark ? const Color(0xFF252A34) : const Color(0xFFFFFFFF),
+        color: widget.isDark
+            ? const Color(0xFF252A34)
+            : const Color(0xFFFFFFFF),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: widget.isDark
@@ -391,13 +413,20 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
     );
   }
 
-  Widget _buildContent(BuildContext context, List<Task> tasks, List<Task> postponedTasks) {
+  Widget _buildContent(
+    BuildContext context,
+    List<Task> tasks,
+    List<Task> postponedTasks,
+  ) {
     // Total tasks includes current tasks for today + tasks moved away (postponed)
     final total = tasks.length + postponedTasks.length;
     final completed = tasks.where((t) => t.status == 'completed').length;
     final pending = tasks.where((t) => t.status == 'pending').length;
     final overdue = tasks
-        .where((t) => t.isOverdue && t.status != 'completed' && t.status != 'not_done')
+        .where(
+          (t) =>
+              t.isOverdue && t.status != 'completed' && t.status != 'not_done',
+        )
         .length;
 
     final filtered = _filteredTasks(tasks);
@@ -417,21 +446,21 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                   Text(
                     "Today's Tasks",
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: widget.isDark
-                              ? const Color(0xFFFFFFFF)
-                              : const Color(0xFF1E1E1E),
-                        ),
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: widget.isDark
+                          ? const Color(0xFFFFFFFF)
+                          : const Color(0xFF1E1E1E),
+                    ),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     '${DateFormat('EEE, MMM d').format(_today)} • $pending pending • $completed done${overdue > 0 ? ' • $overdue overdue' : ''}',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: widget.isDark
-                              ? const Color(0xFFBDBDBD)
-                              : const Color(0xFF6E6E6E),
-                        ),
+                      color: widget.isDark
+                          ? const Color(0xFFBDBDBD)
+                          : const Color(0xFF6E6E6E),
+                    ),
                   ),
                 ],
               ),
@@ -505,7 +534,9 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                     child: Dismissible(
                       key: ValueKey('task_${task.id}'),
                       background: _TaskSwipeBackground(
-                        icon: task.status == 'completed' ? Icons.undo_rounded : Icons.check_circle_rounded,
+                        icon: task.status == 'completed'
+                            ? Icons.undo_rounded
+                            : Icons.check_circle_rounded,
                         label: task.status == 'completed' ? 'Undo' : 'Done',
                         color: const Color(0xFF4CAF50),
                         isDark: widget.isDark,
@@ -522,9 +553,13 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                         if (direction == DismissDirection.startToEnd) {
                           // Swipe right - toggle done/undo
                           if (task.status == 'completed') {
-                            await ref.read(taskNotifierProvider.notifier).undoTaskComplete(task.id);
+                            await ref
+                                .read(taskNotifierProvider.notifier)
+                                .undoTaskComplete(task.id);
                           } else {
-                            await ref.read(taskNotifierProvider.notifier).completeTask(task.id);
+                            await ref
+                                .read(taskNotifierProvider.notifier)
+                                .completeTask(task.id);
                           }
                           // Force refresh to show updated status
                           ref.invalidate(tasksForDateProvider(_today));
@@ -532,7 +567,9 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                         }
                         if (direction == DismissDirection.endToStart) {
                           // Swipe left - delete
-                          await ref.read(taskNotifierProvider.notifier).deleteTask(task.id);
+                          await ref
+                              .read(taskNotifierProvider.notifier)
+                              .deleteTask(task.id);
                           return true;
                         }
                         return false;
@@ -588,7 +625,10 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
     final statusColor = _statusColor(task);
     final hasTime = task.dueTimeHour != null && task.dueTimeMinute != null;
     final timeLabel = hasTime
-        ? TimeOfDay(hour: task.dueTimeHour!, minute: task.dueTimeMinute!).format(context)
+        ? TimeOfDay(
+            hour: task.dueTimeHour!,
+            minute: task.dueTimeMinute!,
+          ).format(context)
         : 'All day';
 
     return Material(
@@ -607,7 +647,9 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: widget.isDark ? const Color(0xFF1F232B) : const Color(0xFFFDFBF6),
+            color: widget.isDark
+                ? const Color(0xFF1F232B)
+                : const Color(0xFFFDFBF6),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: widget.isDark
@@ -624,19 +666,21 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                   shape: BoxShape.circle,
                   gradient: LinearGradient(
                     colors: widget.isDark
-                        ? [statusColor.withOpacity(0.18), statusColor.withOpacity(0.28)]
-                        : [statusColor.withOpacity(0.12), statusColor.withOpacity(0.18)],
+                        ? [
+                            statusColor.withOpacity(0.18),
+                            statusColor.withOpacity(0.28),
+                          ]
+                        : [
+                            statusColor.withOpacity(0.12),
+                            statusColor.withOpacity(0.18),
+                          ],
                   ),
                 ),
                 child: Center(
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
-                      Icon(
-                        icon,
-                        color: statusColor,
-                        size: 22,
-                      ),
+                      Icon(icon, color: statusColor, size: 22),
                       if (task.isRoutineTask)
                         Positioned(
                           right: -4,
@@ -644,7 +688,9 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                           child: Container(
                             padding: const EdgeInsets.all(2),
                             decoration: BoxDecoration(
-                              color: widget.isDark ? const Color(0xFF1F232B) : const Color(0xFFFDFBF6),
+                              color: widget.isDark
+                                  ? const Color(0xFF1F232B)
+                                  : const Color(0xFFFDFBF6),
                               shape: BoxShape.circle,
                               border: Border.all(
                                 color: const Color(0xFFCDAF56).withOpacity(0.5),
@@ -672,17 +718,19 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                         Flexible(
                           child: Text(
                             task.title,
-                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(
                                   fontWeight: FontWeight.w700,
                                   color: task.status == 'completed'
                                       ? const Color(0xFF4CAF50)
                                       : (widget.isDark
-                                          ? const Color(0xFFF8F8F8)
-                                          : const Color(0xFF1E1E1E)),
+                                            ? const Color(0xFFF8F8F8)
+                                            : const Color(0xFF1E1E1E)),
                                   decoration: task.status == 'completed'
                                       ? TextDecoration.lineThrough
                                       : null,
-                                  decorationThickness: task.status == 'completed' ? 2 : null,
+                                  decorationThickness:
+                                      task.status == 'completed' ? 2 : null,
                                   decorationColor: const Color(0xFF4CAF50),
                                 ),
                             maxLines: 1,
@@ -692,7 +740,10 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                         if (task.status == 'not_done') ...[
                           const SizedBox(width: 6),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
                               color: const Color(0xFFFF6B6B).withOpacity(0.15),
                               borderRadius: BorderRadius.circular(4),
@@ -714,7 +765,10 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                         if (task.status == 'completed') ...[
                           const SizedBox(width: 6),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
                               color: const Color(0xFF4CAF50).withOpacity(0.15),
                               borderRadius: BorderRadius.circular(4),
@@ -756,7 +810,9 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                           ),
                         _SmallChip(
                           label: task.priority ?? 'Medium',
-                          color: const Color(0xFF3A3F4A).withOpacity(widget.isDark ? 0.38 : 0.12),
+                          color: const Color(
+                            0xFF3A3F4A,
+                          ).withOpacity(widget.isDark ? 0.38 : 0.12),
                           textColor: widget.isDark
                               ? const Color(0xFFF1F1F1)
                               : const Color(0xFF444444),
@@ -784,7 +840,8 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                           const SizedBox(width: 4),
                           Text(
                             '${(task.subtaskProgress * 100).toInt()}%',
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
                                   color: task.subtaskProgress == 1.0
                                       ? Colors.green
                                       : const Color(0xFFCDAF56),
@@ -834,11 +891,18 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
       case 'not_done':
         return const Color(0xFFFF6B6B);
       default:
-        return task.isOverdue ? const Color(0xFFFF6B6B) : const Color(0xFF4ECDC4);
+        return task.isOverdue
+            ? const Color(0xFFFF6B6B)
+            : const Color(0xFF4ECDC4);
     }
   }
 
-  void _pushWidgetUpdate(List<Task> tasks, int pending, int completed, int overdue) {
+  void _pushWidgetUpdate(
+    List<Task> tasks,
+    int pending,
+    int completed,
+    int overdue,
+  ) {
     final ids = tasks.take(3).map((t) => t.id).join('|');
     final snapshot = '$pending|$completed|$overdue|$ids';
     if (snapshot == _lastWidgetSnapshot) return;
@@ -853,7 +917,9 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14),
       decoration: BoxDecoration(
-        color: widget.isDark ? const Color(0xFF1F232B) : const Color(0xFFFDFBF6),
+        color: widget.isDark
+            ? const Color(0xFF1F232B)
+            : const Color(0xFFFDFBF6),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: widget.isDark
@@ -865,17 +931,19 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
         children: [
           Icon(
             Icons.sentiment_satisfied_alt_rounded,
-            color: widget.isDark ? const Color(0xFFCDAF56) : const Color(0xFFB68D2C),
+            color: widget.isDark
+                ? const Color(0xFFCDAF56)
+                : const Color(0xFFB68D2C),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               'You are all set for today. Add a new task?',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: widget.isDark
-                        ? const Color(0xFFDFDFDF)
-                        : const Color(0xFF4A4A4A),
-                  ),
+                color: widget.isDark
+                    ? const Color(0xFFDFDFDF)
+                    : const Color(0xFF4A4A4A),
+              ),
             ),
           ),
           TextButton(
@@ -898,18 +966,15 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
       children: [
         Row(
           children: [
-            Icon(
-              Icons.error_outline_rounded,
-              color: Colors.redAccent.shade200,
-            ),
+            Icon(Icons.error_outline_rounded, color: Colors.redAccent.shade200),
             const SizedBox(width: 8),
             Text(
               'Could not load today\'s tasks',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: widget.isDark
-                        ? const Color(0xFFDFDFDF)
-                        : const Color(0xFF4A4A4A),
-                  ),
+                color: widget.isDark
+                    ? const Color(0xFFDFDFDF)
+                    : const Color(0xFF4A4A4A),
+              ),
             ),
           ],
         ),
@@ -920,9 +985,7 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
           },
           icon: const Icon(Icons.refresh_rounded, size: 18),
           label: const Text('Retry'),
-          style: TextButton.styleFrom(
-            foregroundColor: const Color(0xFFCDAF56),
-          ),
+          style: TextButton.styleFrom(foregroundColor: const Color(0xFFCDAF56)),
         ),
       ],
     );
@@ -961,7 +1024,8 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                       children: [
                         Text(
                           'Today widget settings',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
                                 fontWeight: FontWeight.w700,
                                 color: widget.isDark
                                     ? const Color(0xFFF8F8F8)
@@ -970,7 +1034,9 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                         ),
                         IconButton(
                           icon: const Icon(Icons.close_rounded),
-                          color: widget.isDark ? const Color(0xFFBDBDBD) : const Color(0xFF6E6E6E),
+                          color: widget.isDark
+                              ? const Color(0xFFBDBDBD)
+                              : const Color(0xFF6E6E6E),
                           onPressed: () => Navigator.of(context).pop(),
                         ),
                       ],
@@ -1013,14 +1079,21 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                             onPressed: () {
                               Navigator.of(context).pop();
                               Navigator.of(context).push(
-                                MaterialPageRoute(builder: (_) => const TasksScreen()),
+                                MaterialPageRoute(
+                                  builder: (_) => const TasksScreen(),
+                                ),
                               );
                             },
                             style: OutlinedButton.styleFrom(
-                              side: BorderSide(color: const Color(0xFFCDAF56).withOpacity(0.6)),
+                              side: BorderSide(
+                                color: const Color(0xFFCDAF56).withOpacity(0.6),
+                              ),
                               foregroundColor: const Color(0xFFCDAF56),
                             ),
-                            icon: const Icon(Icons.view_agenda_rounded, size: 18),
+                            icon: const Icon(
+                              Icons.view_agenda_rounded,
+                              size: 18,
+                            ),
                             label: const Text('View all'),
                           ),
                         ),
@@ -1030,14 +1103,21 @@ class _TodayTasksPanelState extends ConsumerState<_TodayTasksPanel> {
                             onPressed: () {
                               Navigator.of(context).pop();
                               Navigator.of(context).push(
-                                MaterialPageRoute(builder: (_) => const TaskSettingsScreen()),
+                                MaterialPageRoute(
+                                  builder: (_) => const TaskSettingsScreen(),
+                                ),
                               );
                             },
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFFCDAF56),
-                              foregroundColor: widget.isDark ? Colors.black : Colors.white,
+                              foregroundColor: widget.isDark
+                                  ? Colors.black
+                                  : Colors.white,
                             ),
-                            icon: const Icon(Icons.settings_suggest_rounded, size: 18),
+                            icon: const Icon(
+                              Icons.settings_suggest_rounded,
+                              size: 18,
+                            ),
                             label: const Text('Open settings'),
                           ),
                         ),
@@ -1100,25 +1180,16 @@ class _TaskSwipeBackground extends StatelessWidget {
           if (alignRight) ...[
             Text(
               label,
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.w700,
-              ),
+              style: TextStyle(color: color, fontWeight: FontWeight.w700),
             ),
             const SizedBox(width: 8),
           ],
-          Icon(
-            icon,
-            color: color,
-          ),
+          Icon(icon, color: color),
           if (!alignRight) ...[
             const SizedBox(width: 8),
             Text(
               label,
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.w700,
-              ),
+              style: TextStyle(color: color, fontWeight: FontWeight.w700),
             ),
           ],
         ],
@@ -1131,10 +1202,7 @@ class _StatusChip extends StatelessWidget {
   final String label;
   final Color color;
 
-  const _StatusChip({
-    required this.label,
-    required this.color,
-  });
+  const _StatusChip({required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -1147,9 +1215,9 @@ class _StatusChip extends StatelessWidget {
       child: Text(
         label,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: color,
-            ),
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
       ),
     );
   }
@@ -1180,11 +1248,7 @@ class _IconPill extends StatelessWidget {
           borderRadius: BorderRadius.circular(14),
           child: Padding(
             padding: const EdgeInsets.all(10),
-            child: Icon(
-              icon,
-              size: 20,
-              color: const Color(0xFFCDAF56),
-            ),
+            child: Icon(icon, size: 20, color: const Color(0xFFCDAF56)),
           ),
         ),
       ),
@@ -1214,10 +1278,10 @@ class _SmallChip extends StatelessWidget {
       child: Text(
         label,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: textColor,
-            ),
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: textColor,
+        ),
       ),
     );
   }
@@ -1233,10 +1297,7 @@ class _StatusDot extends StatelessWidget {
     return Container(
       width: 10,
       height: 10,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-      ),
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     );
   }
 }
@@ -1273,9 +1334,9 @@ class _SettingSwitch extends StatelessWidget {
         title: Text(
           label,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: isDark ? const Color(0xFFF1F1F1) : const Color(0xFF2C2C2C),
-              ),
+            fontWeight: FontWeight.w600,
+            color: isDark ? const Color(0xFFF1F1F1) : const Color(0xFF2C2C2C),
+          ),
         ),
       ),
     );
@@ -1311,9 +1372,7 @@ class _StatItem extends StatelessWidget {
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
             fontSize: 20,
             fontWeight: FontWeight.w700,
-            color: isDark
-              ? const Color(0xFFFFFFFF)
-              : const Color(0xFF1E1E1E),
+            color: isDark ? const Color(0xFFFFFFFF) : const Color(0xFF1E1E1E),
           ),
         ),
         const SizedBox(height: 4),
@@ -1321,9 +1380,7 @@ class _StatItem extends StatelessWidget {
           label,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
             fontSize: 12,
-            color: isDark
-              ? const Color(0xFFBDBDBD)
-              : const Color(0xFF6E6E6E),
+            color: isDark ? const Color(0xFFBDBDBD) : const Color(0xFF6E6E6E),
           ),
         ),
       ],
@@ -1350,8 +1407,8 @@ class _QuickActionButton extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: isDark
-          ? const Color(0xFF2D3139) // Dark gray
-          : const Color(0xFFFFFFFF),
+            ? const Color(0xFF2D3139) // Dark gray
+            : const Color(0xFFFFFFFF),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: const Color(0xFFCDAF56), // Gold border
@@ -1389,8 +1446,8 @@ class _QuickActionButton extends StatelessWidget {
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
                       color: isDark
-                        ? const Color(0xFFFFFFFF)
-                        : const Color(0xFF1E1E1E),
+                          ? const Color(0xFFFFFFFF)
+                          : const Color(0xFF1E1E1E),
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),

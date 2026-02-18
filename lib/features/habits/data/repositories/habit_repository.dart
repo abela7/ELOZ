@@ -3,6 +3,7 @@ import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../../../../core/data/history_optimization_models.dart';
+import '../../../../core/utils/perf_trace.dart';
 import '../../../../data/local/hive/hive_service.dart';
 import '../models/habit.dart';
 import '../models/habit_completion.dart';
@@ -93,12 +94,14 @@ class HabitRepository {
     if (_habitsBox != null && _habitsBox!.isOpen) {
       return _habitsBox!;
     }
+    final trace = PerfTrace('HabitsRepo._getHabitsBox');
     final opener = _habitsBoxOpener;
     if (opener != null) {
       _habitsBox = await opener();
     } else {
       _habitsBox = await HiveService.getBox<Habit>(habitsBoxName);
     }
+    trace.end('opened', details: {'records': _habitsBox?.length ?? 0});
     return _habitsBox!;
   }
 
@@ -107,6 +110,7 @@ class HabitRepository {
     if (_completionsBox != null && _completionsBox!.isOpen) {
       return _completionsBox!;
     }
+    final trace = PerfTrace('HabitsRepo._getCompletionsBox');
     final opener = _completionsBoxOpener;
     if (opener != null) {
       _completionsBox = await opener();
@@ -115,6 +119,7 @@ class HabitRepository {
         completionsBoxName,
       );
     }
+    trace.end('opened', details: {'records': _completionsBox?.length ?? 0});
     return _completionsBox!;
   }
 
@@ -153,18 +158,29 @@ class HabitRepository {
 
   /// Get all habits (excluding archived by default)
   Future<List<Habit>> getAllHabits({bool includeArchived = false}) async {
+    final trace = PerfTrace('HabitsRepo.getAllHabits');
     final regularBox = await _getHabitsBox();
+    trace.step('regular_box_ready', details: {'records': regularBox.length});
     final habits = regularBox.values.where((h) => !h.isQuitHabit).toList();
+    trace.step('regular_values_loaded', details: {'records': habits.length});
 
     final quitBox = await _getQuitHabitsBoxOrNull();
     if (quitBox != null) {
+      trace.step('quit_box_ready', details: {'records': quitBox.length});
       habits.addAll(quitBox.values);
+      trace.step('quit_values_loaded', details: {'records': habits.length});
     }
 
     if (includeArchived) {
+      trace.end('done', details: {'returned': habits.length, 'archived': true});
       return habits;
     }
-    return habits.where((h) => !h.isArchived).toList();
+    final filtered = habits.where((h) => !h.isArchived).toList();
+    trace.end(
+      'done',
+      details: {'returned': filtered.length, 'archived': false},
+    );
+    return filtered;
   }
 
   /// Get habit by ID
@@ -504,9 +520,11 @@ class HabitRepository {
     if (!_quitSecureStorage.isSessionUnlocked) {
       return null;
     }
+    final trace = PerfTrace('HabitsRepo._getQuitHabitsBox');
     _quitHabitsBox = await _quitSecureStorage.openSecureBox<Habit>(
       secureQuitHabitsBoxName,
     );
+    trace.end('opened', details: {'records': _quitHabitsBox?.length ?? 0});
     return _quitHabitsBox!;
   }
 
@@ -517,8 +535,10 @@ class HabitRepository {
     if (!_quitSecureStorage.isSessionUnlocked) {
       return null;
     }
+    final trace = PerfTrace('HabitsRepo._getQuitCompletionsBox');
     _quitCompletionsBox = await _quitSecureStorage
         .openSecureBox<HabitCompletion>(secureQuitCompletionsBoxName);
+    trace.end('opened', details: {'records': _quitCompletionsBox?.length ?? 0});
     return _quitCompletionsBox!;
   }
 
@@ -564,15 +584,21 @@ class HabitRepository {
   }
 
   Future<Box<dynamic>> _openDynamicBox(String boxName) async {
+    final trace = PerfTrace('HabitsRepo._openDynamicBox');
     final opener = _dynamicBoxOpener;
     if (opener != null) {
-      return opener(boxName);
+      final box = await opener(boxName);
+      trace.end('opened', details: {'box': boxName, 'records': box.length});
+      return box;
     }
-    return HiveService.getBox<dynamic>(boxName);
+    final box = await HiveService.getBox<dynamic>(boxName);
+    trace.end('opened', details: {'box': boxName, 'records': box.length});
+    return box;
   }
 
   Future<void> _ensureRegularCompletionIndexesReady() async {
     if (_regularCompletionIndexesReady) return;
+    final trace = PerfTrace('HabitsRepo.ensureRegularIndexesReady');
     final metaBox = await _getRegularCompletionsIndexMetaBox();
     final version = _asInt(metaBox.get('version'));
     final rebuildNeeded = metaBox.get(_rebuildNeededMetaKey) == true;
@@ -580,6 +606,14 @@ class HabitRepository {
         metaBox.get(_indexedFromMetaKey) is String &&
         metaBox.get(_oldestDataMetaKey) is String;
     var attemptedRebuild = false;
+    trace.step(
+      'meta_loaded',
+      details: {
+        'version': version,
+        'rebuildNeeded': rebuildNeeded,
+        'hasBootstrapWindow': hasBootstrapWindow,
+      },
+    );
 
     if (version != _regularCompletionsIndexVersion ||
         rebuildNeeded ||
@@ -592,16 +626,22 @@ class HabitRepository {
       await _bootstrapRecentRegularCompletionIndexes(reason: reason);
       await metaBox.put('version', _regularCompletionsIndexVersion);
       attemptedRebuild = true;
+      trace.step('bootstrap_rebuild', details: {'reason': reason});
     }
 
     if (!_regularCompletionIntegrityChecked) {
       var valid = await _hasValidRegularCompletionIndexes();
+      trace.step('integrity_checked', details: {'valid': valid});
       if (!valid && !attemptedRebuild) {
         await _bootstrapRecentRegularCompletionIndexes(
           reason: 'integrity_mismatch',
         );
         await metaBox.put('version', _regularCompletionsIndexVersion);
         valid = await _hasValidRegularCompletionIndexes();
+        trace.step(
+          'integrity_rebuild_retry',
+          details: {'validAfterRetry': valid},
+        );
       }
 
       if (!valid) {
@@ -622,6 +662,16 @@ class HabitRepository {
     }
 
     _regularCompletionIndexesReady = true;
+    trace.end(
+      'done',
+      details: {
+        'useIndexes': _useRegularCompletionIndexes,
+        'backfillComplete': _regularBackfillComplete,
+        'indexedFrom': _regularIndexedFromDate == null
+            ? 'null'
+            : _dateKey(_regularIndexedFromDate!),
+      },
+    );
   }
 
   Future<bool> _hasValidRegularCompletionIndexes() async {
@@ -963,7 +1013,8 @@ class HabitRepository {
       await meta.put(_oldestDataMetaKey, _dateKey(dateOnly));
     }
 
-    final indexedFrom = _regularIndexedFromDate ??
+    final indexedFrom =
+        _regularIndexedFromDate ??
         _parseDateKey('${meta.get(_indexedFromMetaKey)}');
     if (indexedFrom != null && dateOnly.isBefore(indexedFrom)) {
       await meta.put(_backfillCompleteMetaKey, false);
@@ -1055,7 +1106,7 @@ class HabitRepository {
   }
 
   void _debugLog(String message) {
-    if (!kDebugMode) return;
+    if (!(kDebugMode || kProfileMode)) return;
     debugPrint('[HabitRepository] $message');
   }
 
@@ -1070,31 +1121,54 @@ class HabitRepository {
     bool includeRegular = true,
     bool includeQuit = true,
   }) async {
+    final trace = PerfTrace('HabitsRepo.getCompletionsForDate');
     final dateKey = DateTime(date.year, date.month, date.day);
 
     // Full cache hit — both regular & quit requested and we already have it.
     if (includeRegular &&
         includeQuit &&
         _completionDateCache.containsKey(dateKey)) {
-      return _completionDateCache[dateKey]!;
+      final cached = _completionDateCache[dateKey]!;
+      trace.end(
+        'cache_hit',
+        details: {'date': _dateKey(dateKey), 'habitCount': cached.length},
+      );
+      return cached;
     }
 
     final result = <String, List<HabitCompletion>>{};
 
     if (includeRegular) {
+      trace.step('regular_prepare_start');
       await _ensureRegularCompletionIndexesReady();
+      trace.step(
+        'regular_indexes_ready',
+        details: {
+          'useIndexes': _useRegularCompletionIndexes,
+          'indexedFrom': _regularIndexedFromDate == null
+              ? 'null'
+              : _dateKey(_regularIndexedFromDate!),
+          'backfillComplete': _regularBackfillComplete,
+        },
+      );
       final regularHabitsBox = await _getHabitsBox();
       final regularHabitIds = regularHabitsBox.values
           .where((h) => !h.isQuitHabit)
           .map((h) => h.id)
           .toSet();
+      trace.step(
+        'regular_habit_ids_ready',
+        details: {'habitIds': regularHabitIds.length},
+      );
 
       final regularCompletionsBox = await _getCompletionsBox();
       if (_useRegularCompletionIndexes &&
           _isDateWithinRegularIndexedRange(date)) {
+        trace.step('regular_read_mode', details: {'mode': 'indexed'});
         final ids = _readStringList(
           (await _getRegularCompletionsDateIndexBox()).get(_dateKey(date)),
         );
+        trace.step('regular_index_ids_ready', details: {'ids': ids.length});
         for (final id in ids) {
           final completion = regularCompletionsBox.get(id);
           if (completion == null) continue;
@@ -1103,7 +1177,12 @@ class HabitRepository {
               .putIfAbsent(completion.habitId, () => <HabitCompletion>[])
               .add(completion);
         }
+        trace.step(
+          'regular_index_records_loaded',
+          details: {'groups': result.length},
+        );
       } else {
+        trace.step('regular_read_mode', details: {'mode': 'scan'});
         for (final completion in regularCompletionsBox.values) {
           if (!completion.isForDate(date)) continue;
           if (!regularHabitIds.contains(completion.habitId)) continue;
@@ -1111,14 +1190,29 @@ class HabitRepository {
               .putIfAbsent(completion.habitId, () => <HabitCompletion>[])
               .add(completion);
         }
+        trace.step(
+          'regular_scan_records_loaded',
+          details: {
+            'groups': result.length,
+            'sourceRecords': regularCompletionsBox.length,
+          },
+        );
       }
     }
 
     if (includeQuit) {
+      trace.step('quit_prepare_start');
       final quitHabitsBox = await _getQuitHabitsBoxOrNull();
       final quitCompletionsBox = await _getQuitCompletionsBoxOrNull();
       if (quitHabitsBox != null && quitCompletionsBox != null) {
         final quitHabitIds = quitHabitsBox.values.map((h) => h.id).toSet();
+        trace.step(
+          'quit_boxes_ready',
+          details: {
+            'habitIds': quitHabitIds.length,
+            'completionRecords': quitCompletionsBox.length,
+          },
+        );
         for (final completion in quitCompletionsBox.values) {
           if (!completion.isForDate(date)) continue;
           if (!quitHabitIds.contains(completion.habitId)) continue;
@@ -1126,6 +1220,7 @@ class HabitRepository {
               .putIfAbsent(completion.habitId, () => <HabitCompletion>[])
               .add(completion);
         }
+        trace.step('quit_records_loaded', details: {'groups': result.length});
       }
     }
 
@@ -1138,6 +1233,10 @@ class HabitRepository {
       _completionDateCache[dateKey] = result;
     }
 
+    trace.end(
+      'done',
+      details: {'date': _dateKey(dateKey), 'habitCount': result.length},
+    );
     return result;
   }
 
@@ -1955,14 +2054,20 @@ class HabitRepository {
   Future<bool> backfillNextChunk({
     int chunkDays = _defaultBackfillChunkDays,
   }) async {
+    final trace = PerfTrace('HabitsRepo.backfillNextChunk');
     await _ensureRegularCompletionIndexesReady();
-    if (!_useRegularCompletionIndexes) return false;
+    if (!_useRegularCompletionIndexes) {
+      trace.end('skip_scan_fallback');
+      return false;
+    }
 
     final meta = await _getRegularCompletionsIndexMetaBox();
     if (meta.get(_backfillPausedMetaKey) == true) {
+      trace.end('skip_paused');
       return false;
     }
     if (meta.get(_backfillCompleteMetaKey) == true) {
+      trace.end('skip_complete');
       return false;
     }
 
@@ -1970,11 +2075,13 @@ class HabitRepository {
     final oldestData = _parseDateKey('${meta.get(_oldestDataMetaKey)}');
     if (indexedFrom == null || oldestData == null) {
       await meta.put(_rebuildNeededMetaKey, true);
+      trace.end('missing_meta');
       return false;
     }
     if (!indexedFrom.isAfter(oldestData)) {
       await meta.put(_backfillCompleteMetaKey, true);
       _regularBackfillComplete = true;
+      trace.end('already_caught_up');
       return false;
     }
 
@@ -2047,6 +2154,15 @@ class HabitRepository {
     await meta.put(_backfillCompleteMetaKey, isComplete);
     _regularIndexedFromDate = newIndexedFrom;
     _regularBackfillComplete = isComplete;
+    trace.end(
+      'done',
+      details: {
+        'chunkDays': chunkDays,
+        'chunkStart': _dateKey(chunkStart),
+        'chunkEnd': _dateKey(chunkEnd),
+        'isComplete': isComplete,
+      },
+    );
     return true;
   }
 }

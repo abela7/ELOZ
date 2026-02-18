@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -11,12 +12,27 @@ import 'notification_recovery_service.dart';
 void notificationWorkmanagerCallbackDispatcher() {
   WidgetsFlutterBinding.ensureInitialized();
   Workmanager().executeTask((taskName, inputData) async {
+    if (kDebugMode) {
+      debugPrint(
+        'NotificationWorkmanager: received task "$taskName" '
+        '(expected: "${NotificationRecoveryService.taskName}")',
+      );
+    }
     if (taskName != NotificationRecoveryService.taskName) {
       return true;
     }
     final result = await NotificationRecoveryService.runRecovery(
       bootstrapForBackground: true,
+      sourceFlow: 'workmanager',
     );
+    if (kDebugMode) {
+      debugPrint(
+        'NotificationWorkmanager: recovery finished - success=${result.success} '
+        'durationMs=${result.durationMs} '
+        'financeScheduled=${result.financeScheduled} financeCancelled=${result.financeCancelled} '
+        'universalScheduled=${result.universalScheduled} universalFailed=${result.universalFailed}',
+      );
+    }
     return result.success;
   });
 }

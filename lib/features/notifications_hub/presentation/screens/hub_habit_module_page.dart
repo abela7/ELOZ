@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../core/notifications/notifications.dart';
 import '../../../../core/services/alarm_service.dart';
@@ -11,6 +12,7 @@ import '../../../../core/services/notification_service.dart';
 import '../../../../core/widgets/settings_widgets.dart';
 import '../../../../data/repositories/task_repository.dart';
 import '../../../habits/data/repositories/habit_repository.dart';
+import '../../../habits/data/models/habit_notification_settings.dart';
 import '../../../habits/presentation/screens/settings/habit_notification_settings_screen.dart';
 import '../widgets/hub_habit_scheduled_section.dart';
 import 'hub_orphaned_notifications_page.dart';
@@ -68,7 +70,24 @@ class _HubHabitModulePageState extends State<HubHabitModulePage>
 
   Future<void> _saveSettings(HubModuleNotificationSettings settings) async {
     await _hub.setModuleSettings(NotificationHubModuleIds.habit, settings);
+    await _syncLegacyHabitToggle(settings.notificationsEnabled);
     setState(() => _settings = settings);
+  }
+
+  Future<void> _syncLegacyHabitToggle(bool? enabled) async {
+    if (enabled == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(habitNotificationSettingsKey);
+    final current = raw == null
+        ? HabitNotificationSettings.defaults
+        : HabitNotificationSettings.fromJsonString(raw);
+    final updated = current.copyWith(notificationsEnabled: enabled);
+    await prefs.setString(habitNotificationSettingsKey, updated.toJsonString());
+    try {
+      await NotificationService().reloadSettings();
+    } catch (_) {
+      // Best-effort sync with legacy habit settings screen.
+    }
   }
 
   Future<void> _syncNotifications() async {
@@ -77,6 +96,7 @@ class _HubHabitModulePageState extends State<HubHabitModulePage>
     try {
       final result = await NotificationRecoveryService.runRecovery(
         bootstrapForBackground: false,
+        sourceFlow: 'hub_habit_manual_sync',
       );
 
       if (mounted) {

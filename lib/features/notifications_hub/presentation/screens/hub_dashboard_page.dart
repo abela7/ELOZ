@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../../../core/notifications/notifications.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -40,6 +43,7 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
     final summary = await _hub.getDashboardSummary();
     final modules = _hub.getRegisteredModules();
     final enabledStates = await _hub.getModuleEnabledStates();
+    final deliveryWarning = await _loadDeliveryWarning(summary);
 
     final hasModules = modules.isNotEmpty;
     final modulesEnabledCount = enabledStates.values.where((e) => e).length;
@@ -85,17 +89,104 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
         enabledLabel: modules.isEmpty
             ? 'N/A'
             : modulesEnabledCount == modules.length
-                ? 'All ${modules.length} enabled'
-                : '$modulesEnabledCount of ${modules.length} enabled',
+            ? 'All ${modules.length} enabled'
+            : '$modulesEnabledCount of ${modules.length} enabled',
         pendingScore: pendingScore,
-        pendingLabel:
-            hasPending ? '${summary.totalPending} scheduled' : 'No scheduled',
+        pendingLabel: hasPending
+            ? '${summary.totalPending} scheduled'
+            : 'No scheduled',
         failuresScore: failuresScore,
         failuresLabel: noFailures
             ? 'No failures today'
             : '${summary.failedToday} failed today',
       ),
+      deliveryWarning: deliveryWarning,
     );
+  }
+
+  Future<_DeliveryWarning?> _loadDeliveryWarning(
+    NotificationHubDashboardSummary summary,
+  ) async {
+    final messages = <String>[];
+    var showPermissionsAction = false;
+    var showFailedAction = false;
+
+    if (Platform.isAndroid || Platform.isIOS) {
+      try {
+        final notifications = await Permission.notification.status;
+        if (!notifications.isGranted) {
+          messages.add(
+            'Notifications permission is blocked. Reminders cannot be delivered until you enable it.',
+          );
+          showPermissionsAction = true;
+        }
+      } catch (_) {}
+    }
+
+    if (Platform.isAndroid) {
+      try {
+        final exactAlarms = await Permission.scheduleExactAlarm.status;
+        if (!exactAlarms.isGranted) {
+          messages.add(
+            'Exact alarms are not allowed. Android may delay or suppress reminder timing.',
+          );
+          showPermissionsAction = true;
+        }
+      } catch (_) {}
+    }
+
+    if (summary.failedToday > 0) {
+      showFailedAction = true;
+      final latestFailed = await _hub.getHistory(
+        event: NotificationLifecycleEvent.failed,
+        from: DateTime.now().subtract(const Duration(days: 1)),
+        limit: 1,
+      );
+      final latestReason = latestFailed.isNotEmpty
+          ? _friendlyFailureReason(latestFailed.first)
+          : null;
+      if (latestReason == null || latestReason.isEmpty) {
+        messages.add(
+          '${summary.failedToday} notification scheduling/delivery failure(s) were logged today.',
+        );
+      } else {
+        messages.add(
+          '${summary.failedToday} failure(s) today. Latest: $latestReason',
+        );
+      }
+    }
+
+    if (messages.isEmpty) {
+      return null;
+    }
+    return _DeliveryWarning(
+      messages: messages,
+      showPermissionsAction: showPermissionsAction,
+      showFailedAction: showFailedAction,
+    );
+  }
+
+  String? _friendlyFailureReason(NotificationLogEntry entry) {
+    final metadata = entry.metadata;
+    final reason = (metadata['reason'] ?? metadata['failureReason'] ?? '')
+        .toString()
+        .trim();
+    final error = (metadata['error'] ?? '').toString().trim();
+    final lower = reason.toLowerCase();
+
+    if (lower.contains('schedule_failed')) {
+      return 'Scheduler rejected a reminder. Check permission/exact-alarm access.';
+    }
+    if (lower.contains('module_policy_blocked')) {
+      return 'Module policy blocked scheduling.';
+    }
+    if (lower.contains('tap_handler_error') ||
+        lower.contains('action_handler_error')) {
+      return 'Handler rejected a stale or invalid notification action.';
+    }
+    if (error.isNotEmpty) return error;
+    if (reason.isNotEmpty) return reason;
+    return null;
   }
 
   Future<void> _refresh() async {
@@ -183,6 +274,27 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                   onOpenPermissions: widget.onNavigateToPermissions,
                 ),
               ),
+              if (data.deliveryWarning != null) ...[
+                const SizedBox(height: 12),
+                _DeliveryWarningCard(
+                  warning: data.deliveryWarning!,
+                  onOpenPermissions: widget.onNavigateToPermissions,
+                  onOpenFailedLogs: () {
+                    HapticFeedback.lightImpact();
+                    Navigator.of(context)
+                        .push(
+                          MaterialPageRoute(
+                            builder: (_) => const HubFailedNotificationsPage(),
+                          ),
+                        )
+                        .then((_) {
+                          if (mounted) {
+                            _refresh();
+                          }
+                        });
+                  },
+                ),
+              ],
               const SizedBox(height: 16),
 
               // ── Quick actions ──
@@ -231,92 +343,94 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                      _StatChip(
-                        label: 'Scheduled',
-                        value: summary.totalPending,
-                        icon: Icons.calendar_today_rounded,
-                        color: Colors.blue,
-                        onTap: summary.totalPending > 0
-                            ? () {
-                                HapticFeedback.lightImpact();
-                                Navigator.of(context).push(
+                        _StatChip(
+                          label: 'Scheduled',
+                          value: summary.totalPending,
+                          icon: Icons.calendar_today_rounded,
+                          color: Colors.blue,
+                          onTap: summary.totalPending > 0
+                              ? () {
+                                  HapticFeedback.lightImpact();
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          const HubUnifiedNotificationsPage(),
+                                    ),
+                                  );
+                                }
+                              : null,
+                        ),
+                        const SizedBox(width: 8),
+                        _StatChip(
+                          label: 'Tapped',
+                          value: summary.tappedToday,
+                          icon: Icons.touch_app_rounded,
+                          color: Colors.green,
+                          onTap: summary.tappedToday > 0
+                              ? () async {
+                                  HapticFeedback.lightImpact();
+                                  await HubActivityDetailSheet.show(
+                                    context,
+                                    event: NotificationLifecycleEvent.tapped,
+                                  );
+                                  if (mounted) _refresh();
+                                }
+                              : null,
+                        ),
+                        const SizedBox(width: 8),
+                        _StatChip(
+                          label: 'Actions',
+                          value: summary.actionToday,
+                          icon: Icons.bolt_rounded,
+                          color: Colors.amber,
+                          onTap: summary.actionToday > 0
+                              ? () async {
+                                  HapticFeedback.lightImpact();
+                                  await HubActivityDetailSheet.show(
+                                    context,
+                                    event: NotificationLifecycleEvent.action,
+                                  );
+                                  if (mounted) _refresh();
+                                }
+                              : null,
+                        ),
+                        const SizedBox(width: 8),
+                        _StatChip(
+                          label: 'Snoozed',
+                          value: summary.snoozedToday,
+                          icon: Icons.snooze_rounded,
+                          color: Colors.deepPurple,
+                          onTap: summary.snoozedToday > 0
+                              ? () async {
+                                  HapticFeedback.lightImpact();
+                                  await HubActivityDetailSheet.show(
+                                    context,
+                                    event: NotificationLifecycleEvent.snoozed,
+                                  );
+                                  if (mounted) _refresh();
+                                }
+                              : null,
+                        ),
+                        const SizedBox(width: 8),
+                        _StatChip(
+                          label: 'Failed',
+                          value: summary.failedToday,
+                          icon: Icons.error_outline_rounded,
+                          color: Colors.red,
+                          onTap: () {
+                            HapticFeedback.lightImpact();
+                            Navigator.of(context)
+                                .push(
                                   MaterialPageRoute(
                                     builder: (_) =>
-                                        const HubUnifiedNotificationsPage(),
+                                        const HubFailedNotificationsPage(),
                                   ),
-                                );
-                              }
-                            : null,
-                      ),
-                      const SizedBox(width: 8),
-                      _StatChip(
-                        label: 'Tapped',
-                        value: summary.tappedToday,
-                        icon: Icons.touch_app_rounded,
-                        color: Colors.green,
-                        onTap: summary.tappedToday > 0
-                            ? () async {
-                                HapticFeedback.lightImpact();
-                                await HubActivityDetailSheet.show(
-                                  context,
-                                  event: NotificationLifecycleEvent.tapped,
-                                );
-                                if (mounted) _refresh();
-                              }
-                            : null,
-                      ),
-                      const SizedBox(width: 8),
-                      _StatChip(
-                        label: 'Actions',
-                        value: summary.actionToday,
-                        icon: Icons.bolt_rounded,
-                        color: Colors.amber,
-                        onTap: summary.actionToday > 0
-                            ? () async {
-                                HapticFeedback.lightImpact();
-                                await HubActivityDetailSheet.show(
-                                  context,
-                                  event: NotificationLifecycleEvent.action,
-                                );
-                                if (mounted) _refresh();
-                              }
-                            : null,
-                      ),
-                      const SizedBox(width: 8),
-                      _StatChip(
-                        label: 'Snoozed',
-                        value: summary.snoozedToday,
-                        icon: Icons.snooze_rounded,
-                        color: Colors.deepPurple,
-                        onTap: summary.snoozedToday > 0
-                            ? () async {
-                                HapticFeedback.lightImpact();
-                                await HubActivityDetailSheet.show(
-                                  context,
-                                  event: NotificationLifecycleEvent.snoozed,
-                                );
-                                if (mounted) _refresh();
-                              }
-                            : null,
-                      ),
-                      const SizedBox(width: 8),
-                      _StatChip(
-                        label: 'Failed',
-                        value: summary.failedToday,
-                        icon: Icons.error_outline_rounded,
-                        color: Colors.red,
-                        onTap: () {
-                          HapticFeedback.lightImpact();
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  const HubFailedNotificationsPage(),
-                            ),
-                          ).then((_) {
-                            if (mounted) _refresh();
-                          });
-                        },
-                      ),
+                                )
+                                .then((_) {
+                                  if (mounted) _refresh();
+                                });
+                          },
+                        ),
                       ],
                     ),
                   ),
@@ -347,7 +461,7 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                             final module = entry.value;
                             final enabled =
                                 data.enabledStates[module.moduleId] ??
-                                    module.defaultEnabled;
+                                module.defaultEnabled;
                             final c = Color(module.colorValue);
 
                             return Column(
@@ -362,32 +476,31 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                                   ),
                                 ListTile(
                                   contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 16, vertical: 4),
+                                    horizontal: 16,
+                                    vertical: 4,
+                                  ),
                                   onTap: () {
                                     HapticFeedback.lightImpact();
                                     Navigator.of(context).push(
                                       MaterialPageRoute(
                                         builder: (_) =>
                                             module.moduleId ==
-                                                    FinanceNotificationContract
-                                                        .moduleId
-                                                ? const HubFinanceModulePage()
-                                                : module.moduleId ==
-                                                        SleepNotificationContract
-                                                            .moduleId
-                                                    ? const HubSleepModulePage()
-                                                    : module.moduleId ==
-                                                            NotificationHubModuleIds
-                                                                .task
-                                                        ? const HubTaskModulePage()
-                                                        : module.moduleId ==
-                                                                NotificationHubModuleIds
-                                                                    .habit
-                                                            ? const HubHabitModulePage()
-                                                            : HubModuleDetailPage(
-                                                                moduleId:
-                                                                    module.moduleId,
-                                                              ),
+                                                FinanceNotificationContract
+                                                    .moduleId
+                                            ? const HubFinanceModulePage()
+                                            : module.moduleId ==
+                                                  SleepNotificationContract
+                                                      .moduleId
+                                            ? const HubSleepModulePage()
+                                            : module.moduleId ==
+                                                  NotificationHubModuleIds.task
+                                            ? const HubTaskModulePage()
+                                            : module.moduleId ==
+                                                  NotificationHubModuleIds.habit
+                                            ? const HubHabitModulePage()
+                                            : HubModuleDetailPage(
+                                                moduleId: module.moduleId,
+                                              ),
                                       ),
                                     );
                                   },
@@ -399,10 +512,11 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                                       borderRadius: BorderRadius.circular(12),
                                     ),
                                     child: Icon(
-                                      IconData(module.iconCodePoint,
-                                          fontFamily: module.iconFontFamily,
-                                          fontPackage:
-                                              module.iconFontPackage),
+                                      IconData(
+                                        module.iconCodePoint,
+                                        fontFamily: module.iconFontFamily,
+                                        fontPackage: module.iconFontPackage,
+                                      ),
                                       color: c,
                                       size: 20,
                                     ),
@@ -417,8 +531,7 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                                   subtitle: Text(
                                     '${summary.pendingByModule[module.moduleId] ?? 0} pending',
                                     style: theme.textTheme.bodySmall?.copyWith(
-                                      color:
-                                          theme.colorScheme.onSurfaceVariant,
+                                      color: theme.colorScheme.onSurfaceVariant,
                                       fontSize: 12,
                                     ),
                                   ),
@@ -427,18 +540,22 @@ class _HubDashboardPageState extends State<HubDashboardPage> {
                                     children: [
                                       Switch.adaptive(
                                         value: enabled,
-                                        activeColor: AppColorSchemes.primaryGold,
+                                        activeColor:
+                                            AppColorSchemes.primaryGold,
                                         onChanged: (val) async {
                                           HapticFeedback.lightImpact();
                                           await _hub.setModuleEnabled(
-                                              module.moduleId, val);
+                                            module.moduleId,
+                                            val,
+                                          );
                                           if (mounted) await _refresh();
                                         },
                                       ),
                                       Icon(
                                         Icons.chevron_right_rounded,
                                         size: 20,
-                                        color: theme.colorScheme.onSurfaceVariant,
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
                                       ),
                                     ],
                                   ),
@@ -468,6 +585,7 @@ class _DashData {
   final Map<String, bool> enabledStates;
   final int healthScore;
   final _HealthBreakdown healthBreakdown;
+  final _DeliveryWarning? deliveryWarning;
 
   const _DashData({
     required this.summary,
@@ -475,6 +593,19 @@ class _DashData {
     required this.enabledStates,
     required this.healthScore,
     required this.healthBreakdown,
+    required this.deliveryWarning,
+  });
+}
+
+class _DeliveryWarning {
+  final List<String> messages;
+  final bool showPermissionsAction;
+  final bool showFailedAction;
+
+  const _DeliveryWarning({
+    required this.messages,
+    required this.showPermissionsAction,
+    required this.showFailedAction,
   });
 }
 
@@ -531,6 +662,87 @@ class _ErrorRetry extends StatelessWidget {
 }
 
 // ─── Headline card ───
+
+class _DeliveryWarningCard extends StatelessWidget {
+  final _DeliveryWarning warning;
+  final VoidCallback onOpenPermissions;
+  final VoidCallback onOpenFailedLogs;
+
+  const _DeliveryWarningCard({
+    required this.warning,
+    required this.onOpenPermissions,
+    required this.onOpenFailedLogs,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    const accent = Colors.orange;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: isDark ? 0.12 : 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: accent.withValues(alpha: 0.45)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: accent, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Delivery Warning',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...warning.messages
+              .take(3)
+              .map(
+                (message) => Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    '- $message',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ),
+          if (warning.showPermissionsAction || warning.showFailedAction) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (warning.showPermissionsAction)
+                  FilledButton.tonalIcon(
+                    onPressed: onOpenPermissions,
+                    icon: const Icon(Icons.security_rounded, size: 18),
+                    label: const Text('Open Permissions'),
+                  ),
+                if (warning.showFailedAction)
+                  FilledButton.tonalIcon(
+                    onPressed: onOpenFailedLogs,
+                    icon: const Icon(Icons.error_outline_rounded, size: 18),
+                    label: const Text('View Failed Logs'),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
 
 class _HeadlineCard extends StatelessWidget {
   final int count;
@@ -599,8 +811,10 @@ class _HeadlineCard extends StatelessWidget {
               const Spacer(),
               if (time != null)
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColorSchemes.primaryGold.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(8),
@@ -675,8 +889,8 @@ class _HubHealthBreakdownSheet extends StatelessWidget {
     final c = score >= 75
         ? AppColors.success
         : score >= 50
-            ? Colors.amber
-            : AppColors.error;
+        ? Colors.amber
+        : AppColors.error;
 
     return Container(
       margin: const EdgeInsets.all(12),
@@ -865,10 +1079,7 @@ class _HealthScoreCard extends StatelessWidget {
   final int score;
   final VoidCallback? onTap;
 
-  const _HealthScoreCard({
-    required this.score,
-    this.onTap,
-  });
+  const _HealthScoreCard({required this.score, this.onTap});
 
   Color _color() {
     if (score >= 75) return AppColors.success;
@@ -898,9 +1109,7 @@ class _HealthScoreCard extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: c.withOpacity(isDark ? 0.3 : 0.2),
-            ),
+            border: Border.all(color: c.withOpacity(isDark ? 0.3 : 0.2)),
           ),
           child: Row(
             children: [
@@ -994,8 +1203,9 @@ class _QuickActionCard extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: theme.colorScheme.outlineVariant
-                  .withOpacity(isDark ? 0.3 : 0.4),
+              color: theme.colorScheme.outlineVariant.withOpacity(
+                isDark ? 0.3 : 0.4,
+              ),
             ),
           ),
           child: Row(
@@ -1044,9 +1254,7 @@ class _StatChip extends StatelessWidget {
       decoration: BoxDecoration(
         color: color.withOpacity(isDark ? 0.1 : 0.06),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: color.withOpacity(isDark ? 0.2 : 0.12),
-        ),
+        border: Border.all(color: color.withOpacity(isDark ? 0.2 : 0.12)),
       ),
       child: Column(
         children: [
@@ -1076,17 +1284,16 @@ class _StatChip extends StatelessWidget {
       ),
     );
 
-    final content =
-        onTap != null
-            ? Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: onTap,
-                  borderRadius: BorderRadius.circular(12),
-                  child: chip,
-                ),
-              )
-            : chip;
+    final content = onTap != null
+        ? Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(12),
+              child: chip,
+            ),
+          )
+        : chip;
     // Do NOT use Expanded: chips live in a horizontal SingleChildScrollView
     // where the Row has unbounded width; Expanded would cause parentDataDirty
     // semantics assertion.

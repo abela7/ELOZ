@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../../core/notifications/notifications.dart';
+import '../../../../core/services/notification_service.dart';
 import '../../../../core/theme/color_schemes.dart';
 
 /// Page to wipe Hub History and optionally perform a full hub reset.
@@ -85,8 +86,8 @@ class _HubClearHistoryPageState extends State<HubClearHistoryPage> {
           'This will:\n'
           '• Wipe the history log\n'
           '• Delete all stored Universal notification definitions from the database\n'
-          '• Cancel all alarms from those definitions\n\n'
-          'Finance, Task, Habit legacy alarms are NOT touched.',
+          '• Cancel all currently pending app notifications\n'
+          '• Clear tracked notification bookkeeping data',
         ),
         actions: [
           TextButton(
@@ -110,19 +111,19 @@ class _HubClearHistoryPageState extends State<HubClearHistoryPage> {
     try {
       await _hub.initialize();
 
-      // 1. Cancel all Universal notification alarms before wiping definitions
+      // 1. Cancel all currently pending notifications across modules.
+      final notificationService = NotificationService();
+      await notificationService.initialize();
+      final clearedPending = await notificationService
+          .cancelAllPendingNotificationsDeep(logActivity: false);
+
+      // 2. Wipe Universal definitions from Hive.
       final repo = UniversalNotificationRepository();
       await repo.init();
-      final allDefs = await repo.getAll();
-      final scheduler = UniversalNotificationScheduler();
-      for (final def in allDefs) {
-        await scheduler.cancelForNotification(def);
-      }
-
-      // 2. Wipe Universal definitions from Hive
+      final defsBefore = (await repo.getAll()).length;
       await repo.clearAll();
 
-      // 3. Wipe history log from SharedPreferences
+      // 3. Wipe history log from SharedPreferences.
       await _hub.clearHistory();
 
       if (mounted) {
@@ -132,8 +133,11 @@ class _HubClearHistoryPageState extends State<HubClearHistoryPage> {
           _fullResetDone = true;
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Notification Hub fully reset'),
+          SnackBar(
+            content: Text(
+              'Hub reset complete: cleared $clearedPending pending, '
+              '$defsBefore definitions, and history log',
+            ),
             backgroundColor: Colors.green,
           ),
         );
@@ -167,7 +171,7 @@ class _HubClearHistoryPageState extends State<HubClearHistoryPage> {
             Icon(
               Icons.restart_alt_rounded,
               size: 56,
-              color: AppColorSchemes.primaryGold.withOpacity(0.6),
+              color: AppColorSchemes.primaryGold.withValues(alpha: 0.6),
             ),
             const SizedBox(height: 20),
             Text(
@@ -192,7 +196,8 @@ class _HubClearHistoryPageState extends State<HubClearHistoryPage> {
             // Wipe history only
             _ActionCard(
               title: 'Wipe history log',
-              subtitle: 'Removes all log entries (scheduled, tapped, failed, cancelled)',
+              subtitle:
+                  'Removes all log entries (scheduled, tapped, failed, cancelled)',
               icon: Icons.history_rounded,
               color: Colors.orange,
               onPressed: _isWorking ? null : _wipeHistoryOnly,
@@ -203,7 +208,8 @@ class _HubClearHistoryPageState extends State<HubClearHistoryPage> {
             // Full reset
             _ActionCard(
               title: 'Full reset',
-              subtitle: 'Wipe history + delete all stored definitions from database + cancel their alarms',
+              subtitle:
+                  'Wipe history + delete all universal definitions + cancel all pending notifications',
               icon: Icons.delete_forever_rounded,
               color: Colors.red,
               onPressed: _isWorking ? null : _fullReset,
@@ -212,9 +218,7 @@ class _HubClearHistoryPageState extends State<HubClearHistoryPage> {
             if (_isWorking)
               const Padding(
                 padding: EdgeInsets.only(top: 24),
-                child: Center(
-                  child: CircularProgressIndicator.adaptive(),
-                ),
+                child: Center(child: CircularProgressIndicator.adaptive()),
               ),
           ],
         ),
@@ -246,7 +250,7 @@ class _ActionCard extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
 
     return Material(
-      color: color.withOpacity(isDark ? 0.08 : 0.05),
+      color: color.withValues(alpha: isDark ? 0.08 : 0.05),
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         onTap: onPressed,
@@ -256,7 +260,7 @@ class _ActionCard extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: color.withOpacity(isDark ? 0.2 : 0.15),
+              color: color.withValues(alpha: isDark ? 0.2 : 0.15),
             ),
           ),
           child: Row(
@@ -287,11 +291,7 @@ class _ActionCard extends StatelessWidget {
               if (done)
                 Icon(Icons.check_circle_rounded, color: Colors.green, size: 24)
               else if (onPressed != null)
-                Icon(
-                  Icons.chevron_right_rounded,
-                  color: color,
-                  size: 24,
-                ),
+                Icon(Icons.chevron_right_rounded, color: color, size: 24),
             ],
           ),
         ),

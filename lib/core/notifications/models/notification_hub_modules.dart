@@ -3,6 +3,8 @@ class NotificationHubModuleIds {
   static const String habit = 'habit';
   static const String finance = 'finance';
   static const String sleep = 'sleep';
+  static const String mbtMood = 'mbt_mood';
+  static const String behavior = 'behavior_tracker';
 }
 
 class NotificationHubIdRanges {
@@ -17,4 +19,10 @@ class NotificationHubIdRanges {
 
   static const int sleepStart = 300000;
   static const int sleepEnd = 309999;
+
+  static const int mbtMoodStart = 310000;
+  static const int mbtMoodEnd = 319999;
+
+  static const int behaviorStart = 320000;
+  static const int behaviorEnd = 329999;
 }

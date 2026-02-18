@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/theme/dark_gradient.dart';
+import '../../../../core/notifications/services/notification_system_refresher.dart';
+import '../../../../core/services/notification_service.dart';
 import '../../../../core/data/history_optimization_models.dart';
 import '../../data/services/comprehensive_app_backup_service.dart';
 import '../../data/services/history_optimization_service.dart';
@@ -234,7 +236,7 @@ class _ComprehensiveDataBackupScreenState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Included: Tasks, Habits, Sleep, Notification Hub, app settings.',
+            'Included: Tasks, Habits, Sleep, MBT Mood, Behavior Tracker, Notification Hub, app settings.',
           ),
           SizedBox(height: 6),
           Text(
@@ -399,10 +401,29 @@ class _ComprehensiveDataBackupScreenState
         _lastActionWasImport = true;
       });
 
+      setState(() {
+        _status = 'Rebuilding notification schedules...';
+      });
+      final notificationService = NotificationService();
+      await notificationService.initialize(startupOptimized: true);
+      final clearedPending = await notificationService
+          .cancelAllPendingNotificationsDeep(logActivity: false);
+
+      final recovery = await NotificationSystemRefresher.instance.resyncAll(
+        reason: 'backup_restore_complete',
+        force: true,
+        debounce: false,
+      );
+      if (!mounted) return;
+
       HapticFeedback.heavyImpact();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Import completed. Restart app to refresh all state.'),
+        SnackBar(
+          content: Text(
+            recovery == null
+                ? 'Import completed. Cleared $clearedPending pending notifications. Restart app to refresh all state.'
+                : 'Import completed. Cleared $clearedPending pending notifications and rebuilt schedules.',
+          ),
           backgroundColor: Colors.green,
           duration: Duration(seconds: 4),
         ),
