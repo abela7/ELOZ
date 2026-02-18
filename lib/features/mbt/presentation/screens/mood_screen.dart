@@ -32,6 +32,8 @@ class _MoodScreenState extends State<MoodScreen> {
   bool _loading = true;
   bool _savingReminder = false;
   String? _error;
+  int _moodFlowActiveIndex = 0;
+  late final PageController _moodFlowController;
 
   DateTime _selectedDate = DateTime.now();
   List<Mood> _moods = const <Mood>[];
@@ -61,7 +63,14 @@ class _MoodScreenState extends State<MoodScreen> {
   @override
   void initState() {
     super.initState();
+    _moodFlowController = PageController(viewportFraction: 0.22);
     unawaited(_initialize());
+  }
+
+  @override
+  void dispose() {
+    _moodFlowController.dispose();
+    super.dispose();
   }
 
   Future<void> _initialize() async {
@@ -117,7 +126,13 @@ class _MoodScreenState extends State<MoodScreen> {
     try {
       final entries = await _api.getMoodEntriesForDate(_selectedDate);
       if (!mounted) return;
-      setState(() => _selectedEntries = entries);
+      setState(() {
+        _selectedEntries = entries;
+        _moodFlowActiveIndex = 0;
+      });
+      if (_moodFlowController.hasClients) {
+        _moodFlowController.jumpToPage(0);
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = '$error');
@@ -131,10 +146,8 @@ class _MoodScreenState extends State<MoodScreen> {
     }
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (context) => MoodLogScreen(
-          initialDate: _selectedDate,
-          entryId: entryId,
-        ),
+        builder: (context) =>
+            MoodLogScreen(initialDate: _selectedDate, entryId: entryId),
       ),
     );
     if (changed == true && mounted) {
@@ -147,9 +160,7 @@ class _MoodScreenState extends State<MoodScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Entry'),
-        content: const Text(
-          'Remove this mood entry? This cannot be undone.',
-        ),
+        content: const Text('Remove this mood entry? This cannot be undone.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -284,7 +295,8 @@ class _MoodScreenState extends State<MoodScreen> {
       ),
       body: _loading
           ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFCDAF56)))
+              child: CircularProgressIndicator(color: Color(0xFFCDAF56)),
+            )
           : RefreshIndicator(
               onRefresh: _reload,
               displacement: 20,
@@ -295,14 +307,20 @@ class _MoodScreenState extends State<MoodScreen> {
                   if (details.primaryVelocity != null &&
                       details.primaryVelocity! > 500) {
                     HapticFeedback.selectionClick();
-                    setState(() => _selectedDate =
-                        _selectedDate.subtract(const Duration(days: 1)));
+                    setState(
+                      () => _selectedDate = _selectedDate.subtract(
+                        const Duration(days: 1),
+                      ),
+                    );
                     unawaited(_loadSelectedDateEntries());
                   } else if (details.primaryVelocity != null &&
                       details.primaryVelocity! < -500) {
                     HapticFeedback.selectionClick();
-                    setState(() => _selectedDate =
-                        _selectedDate.add(const Duration(days: 1)));
+                    setState(
+                      () => _selectedDate = _selectedDate.add(
+                        const Duration(days: 1),
+                      ),
+                    );
                     unawaited(_loadSelectedDateEntries());
                   }
                 },
@@ -325,6 +343,8 @@ class _MoodScreenState extends State<MoodScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: _buildTodayCard(context, isDark),
                     ),
+                    const SizedBox(height: 12),
+                    _buildMoodFlowSection(context, isDark),
                     const SizedBox(height: 20),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -407,225 +427,497 @@ class _MoodScreenState extends State<MoodScreen> {
 
     return _cardShell(
       isDark,
-      onTap: _openLogScreen,
+      onTap: entries.isEmpty ? _openLogScreen : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Text(
-                'TODAY\'S MOOD',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  color: const Color(0xFFCDAF56),
-                  letterSpacing: 1.0,
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(
+                    0xFFCDAF56,
+                  ).withOpacity(isDark ? 0.15 : 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'TODAY\'S LOG',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFFCDAF56),
+                    letterSpacing: 1.2,
+                  ),
                 ),
               ),
               const Spacer(),
-              Text(
-                DateFormat('EEE, MMM d').format(_selectedDate),
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: isDark ? Colors.white38 : Colors.black38,
+              if (entries.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.white.withOpacity(0.06)
+                        : Colors.black.withOpacity(0.04),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '${entries.length} ${entries.length == 1 ? 'entry' : 'entries'}',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: isDark ? Colors.white38 : Colors.black38,
+                    ),
+                  ),
+                )
+              else
+                Text(
+                  DateFormat('EEE, MMM d').format(_selectedDate),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white38 : Colors.black38,
+                  ),
                 ),
-              ),
             ],
           ),
           const SizedBox(height: 16),
           if (entries.isEmpty)
-            Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: isDark ? Colors.white.withOpacity(0.05) : const Color(0xFFF5F5F7),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Icon(
-                    Icons.add_reaction_outlined,
-                    color: isDark ? Colors.white24 : Colors.black26,
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'No entries yet',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: isDark ? Colors.white70 : Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Tap to log your mood',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: isDark ? Colors.white38 : Colors.black38,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  Icons.arrow_forward_ios_rounded,
-                  size: 14,
-                  color: isDark ? Colors.white24 : Colors.black26,
-                ),
-              ],
-            )
+            _buildEmptyLogState(isDark)
           else
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final entry in entries)
-                  _buildTimelineEntry(context, isDark, entry),
-                const SizedBox(height: 8),
-                GestureDetector(
-                  onTap: () => _openLogScreen(),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.add_circle_outline_rounded,
-                        size: 18,
-                        color: const Color(0xFFCDAF56),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Add another',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: const Color(0xFFCDAF56),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+            _buildFilledLogState(context, isDark, entries),
         ],
       ),
+    );
+  }
+
+  Widget _buildEmptyLogState(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      child: Center(
+        child: Column(
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: const Color(
+                  0xFFCDAF56,
+                ).withOpacity(isDark ? 0.08 : 0.06),
+                shape: BoxShape.circle,
+              ),
+              child: Center(
+                child: Text('😶', style: const TextStyle(fontSize: 30)),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'How are you feeling?',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: isDark ? Colors.white70 : Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Tap to log your mood',
+              style: TextStyle(
+                fontSize: 13,
+                color: isDark ? Colors.white38 : Colors.black38,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilledLogState(
+    BuildContext context,
+    bool isDark,
+    List<MoodEntry> entries,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < entries.length; i++)
+          _buildTimelineEntry(
+            context,
+            isDark,
+            entries[i],
+            isFirst: i == 0,
+            isLast: i == entries.length - 1,
+          ),
+        const SizedBox(height: 12),
+        Center(
+          child: GestureDetector(
+            onTap: () => _openLogScreen(),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(
+                  0xFFCDAF56,
+                ).withOpacity(isDark ? 0.12 : 0.08),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.add_rounded,
+                    size: 16,
+                    color: const Color(0xFFCDAF56),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Log mood',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFFCDAF56),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildTimelineEntry(
     BuildContext context,
     bool isDark,
-    MoodEntry entry,
-  ) {
+    MoodEntry entry, {
+    bool isFirst = false,
+    bool isLast = false,
+  }) {
     final mood = _moodById[entry.moodId];
+    final moodColor = Color(mood?.colorValue ?? 0xFFCDAF56);
     final timeStr = DateFormat('h:mm a').format(entry.loggedAt);
+    final hasEmoji = mood?.emojiCodePoint != null;
+    final lineColor = isDark
+        ? Colors.white.withOpacity(0.08)
+        : Colors.black.withOpacity(0.06);
 
     return GestureDetector(
       onTap: () => _openLogScreen(entryId: entry.id),
       onLongPress: () => _deleteEntry(entry),
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 12),
+      child: IntrinsicHeight(
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(
-              width: 52,
-              child: Text(
-                timeStr,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: isDark ? Colors.white38 : Colors.black45,
-                ),
-              ),
-            ),
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(mood?.colorValue ?? 0xFFCDAF56)
-                        .withOpacity(isDark ? 0.25 : 0.15),
-                    Color(mood?.colorValue ?? 0xFFCDAF56)
-                        .withOpacity(isDark ? 0.15 : 0.08),
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: Color(mood?.colorValue ?? 0xFFCDAF56)
-                      .withOpacity(isDark ? 0.3 : 0.2),
-                  width: 1,
-                ),
-              ),
-              child: Center(
-                child: mood != null && mood.emojiCodePoint != null
-                    ? Text(
-                        mood.emojiCharacter,
-                        style: const TextStyle(fontSize: 20),
-                      )
-                    : Icon(
-                        mood?.icon ?? Icons.hide_source_rounded,
-                        color: Color(mood?.colorValue ?? 0xFFCDAF56),
-                        size: 20,
-                      ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
+              width: 24,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    mood?.name ?? 'Missing mood',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: isDark ? Colors.white : Colors.black87,
+                  if (!isFirst)
+                    Expanded(
+                      child: Center(
+                        child: Container(width: 2, color: lineColor),
+                      ),
+                    )
+                  else
+                    const Spacer(),
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: moodColor.withOpacity(isDark ? 0.5 : 0.35),
+                      border: Border.all(
+                        color: moodColor.withOpacity(isDark ? 0.8 : 0.6),
+                        width: 2.5,
+                      ),
                     ),
                   ),
-                  if (_formatReasons(entry, _reasonById).isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      _formatReasons(entry, _reasonById),
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? Colors.white54 : Colors.black54,
+                  if (!isLast)
+                    Expanded(
+                      child: Center(
+                        child: Container(width: 2, color: lineColor),
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                  if ((entry.customNote ?? '').trim().isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      entry.customNote!.trim(),
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontStyle: FontStyle.italic,
-                        color: isDark ? Colors.white38 : Colors.black38,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
+                    )
+                  else
+                    const Spacer(),
                 ],
               ),
             ),
-            Icon(
-              Icons.chevron_right_rounded,
-              size: 18,
-              color: isDark ? Colors.white24 : Colors.black26,
+            const SizedBox(width: 8),
+            Expanded(
+              child: Container(
+                margin: EdgeInsets.only(bottom: isLast ? 0 : 10),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? Colors.white.withOpacity(0.03)
+                      : const Color(0xFFF9F7F2),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: moodColor.withOpacity(isDark ? 0.12 : 0.08),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            moodColor.withOpacity(isDark ? 0.20 : 0.12),
+                            moodColor.withOpacity(isDark ? 0.10 : 0.05),
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                      child: Center(
+                        child: hasEmoji
+                            ? Text(
+                                mood!.emojiCharacter,
+                                style: const TextStyle(fontSize: 24),
+                              )
+                            : Icon(
+                                mood?.icon ?? Icons.mood_rounded,
+                                color: moodColor,
+                                size: 24,
+                              ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  mood?.name ?? 'Unknown',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: isDark
+                                        ? Colors.white
+                                        : Colors.black87,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                timeStr,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: isDark
+                                      ? Colors.white30
+                                      : Colors.black38,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            _formatReasons(entry, _reasonById),
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: isDark ? Colors.white38 : Colors.black45,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildMoodFlowSection(BuildContext context, bool isDark) {
+    final entries = _selectedEntries;
+    if (entries.isEmpty) return const SizedBox.shrink();
+
+    final safeIndex = _moodFlowActiveIndex.clamp(0, entries.length - 1);
+    final activeMood = _moodById[entries[safeIndex].moodId];
+    final activeColor = Color(activeMood?.colorValue ?? 0xFFCDAF56);
+    final activeTime = DateFormat('h:mm a').format(entries[safeIndex].loggedAt);
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOut,
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark
+            ? activeColor.withOpacity(0.08)
+            : activeColor.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: activeColor.withOpacity(isDark ? 0.18 : 0.12),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.timeline_rounded,
+                size: 14,
+                color: activeColor.withOpacity(0.6),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'MOOD FLOW',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  color: isDark ? Colors.white38 : Colors.black38,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const Spacer(),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                child: Text(
+                  activeTime,
+                  key: ValueKey(activeTime),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: activeColor.withOpacity(0.7),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 72,
+            child: PageView.builder(
+              controller: _moodFlowController,
+              itemCount: entries.length,
+              onPageChanged: (index) {
+                setState(() => _moodFlowActiveIndex = index);
+              },
+              itemBuilder: (context, index) {
+                final entry = entries[index];
+                final mood = _moodById[entry.moodId];
+                final moodColor = Color(mood?.colorValue ?? 0xFFCDAF56);
+                final hasEmoji = mood?.emojiCodePoint != null;
+                final isActive = index == safeIndex;
+
+                return AnimatedScale(
+                  scale: isActive ? 1.0 : 0.75,
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOut,
+                  child: AnimatedOpacity(
+                    opacity: isActive ? 1.0 : 0.4,
+                    duration: const Duration(milliseconds: 250),
+                    child: GestureDetector(
+                      onTap: () => _openLogScreen(entryId: entry.id),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: moodColor.withOpacity(
+                                isDark ? 0.18 : 0.12,
+                              ),
+                              borderRadius: BorderRadius.circular(14),
+                              border: isActive
+                                  ? Border.all(
+                                      color: moodColor.withOpacity(0.4),
+                                      width: 2,
+                                    )
+                                  : null,
+                            ),
+                            child: Center(
+                              child: hasEmoji
+                                  ? Text(
+                                      mood!.emojiCharacter,
+                                      style: const TextStyle(fontSize: 26),
+                                    )
+                                  : Icon(
+                                      mood?.icon ?? Icons.mood_rounded,
+                                      color: moodColor,
+                                      size: 24,
+                                    ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          AnimatedDefaultTextStyle(
+                            duration: const Duration(milliseconds: 250),
+                            style: TextStyle(
+                              fontSize: isActive ? 11 : 9,
+                              fontWeight: isActive
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: isActive
+                                  ? (isDark ? Colors.white70 : Colors.black54)
+                                  : (isDark ? Colors.white24 : Colors.black26),
+                            ),
+                            child: Text(mood?.name ?? ''),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (entries.length > 1)
+            Center(
+              child: entries.length <= 10
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: List.generate(
+                        entries.length,
+                        (i) => AnimatedContainer(
+                          duration: const Duration(milliseconds: 250),
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          width: i == safeIndex ? 16 : 5,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(3),
+                            color: i == safeIndex
+                                ? activeColor.withOpacity(0.7)
+                                : (isDark
+                                      ? Colors.white.withOpacity(0.1)
+                                      : Colors.black.withOpacity(0.08)),
+                          ),
+                        ),
+                      ),
+                    )
+                  : Text(
+                      '${safeIndex + 1} / ${entries.length}',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? Colors.white30 : Colors.black38,
+                      ),
+                    ),
+            ),
+        ],
       ),
     );
   }
@@ -676,7 +968,9 @@ class _MoodScreenState extends State<MoodScreen> {
     if (positivePercent + negativePercent < 1) return '—';
     final diff = (positivePercent - negativePercent).abs();
     if (diff < 15) return 'Balanced';
-    return positivePercent > negativePercent ? 'Mostly positive' : 'Mostly negative';
+    return positivePercent > negativePercent
+        ? 'Mostly positive'
+        : 'Mostly negative';
   }
 
   Color _tendencyColor(double positivePercent, double negativePercent) {
@@ -728,8 +1022,14 @@ class _MoodScreenState extends State<MoodScreen> {
                 child: _MetricTile(
                   isDark: isDark,
                   label: 'Tendency',
-                  value: _tendencyLabel(weekly.positivePercent, weekly.negativePercent),
-                  valueColor: _tendencyColor(weekly.positivePercent, weekly.negativePercent),
+                  value: _tendencyLabel(
+                    weekly.positivePercent,
+                    weekly.negativePercent,
+                  ),
+                  valueColor: _tendencyColor(
+                    weekly.positivePercent,
+                    weekly.negativePercent,
+                  ),
                 ),
               ),
               const SizedBox(width: 10),
@@ -842,10 +1142,7 @@ class _MoodScreenState extends State<MoodScreen> {
               'Reminder time',
               style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
             ),
-            subtitle: Text(
-              subtitle,
-              style: const TextStyle(fontSize: 12),
-            ),
+            subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
             trailing: const Icon(Icons.chevron_right_rounded, size: 20),
             onTap: _reminderSettings.enabled ? _pickReminderTime : null,
           ),
@@ -877,10 +1174,14 @@ class _MoodScreenState extends State<MoodScreen> {
                         vertical: 8,
                       ),
                       decoration: BoxDecoration(
-                        color: Color(mood.colorValue).withOpacity(isDark ? 0.12 : 0.08),
+                        color: Color(
+                          mood.colorValue,
+                        ).withOpacity(isDark ? 0.12 : 0.08),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: Color(mood.colorValue).withOpacity(isDark ? 0.3 : 0.2),
+                          color: Color(
+                            mood.colorValue,
+                          ).withOpacity(isDark ? 0.3 : 0.2),
                           width: 1,
                         ),
                       ),
@@ -936,10 +1237,7 @@ class _MoodScreenState extends State<MoodScreen> {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: child,
-          ),
+          child: Padding(padding: const EdgeInsets.all(18), child: child),
         ),
       ),
     );
@@ -999,10 +1297,14 @@ class _MetricTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
       decoration: BoxDecoration(
-        color: isDark ? Colors.white.withOpacity(0.03) : const Color(0xFFF5F5F7),
+        color: isDark
+            ? Colors.white.withOpacity(0.03)
+            : const Color(0xFFF5F5F7),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
+          color: isDark
+              ? Colors.white.withOpacity(0.05)
+              : Colors.black.withOpacity(0.03),
         ),
       ),
       child: Column(
