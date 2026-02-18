@@ -619,6 +619,22 @@ class _MoodScreenState extends State<MoodScreen> {
     );
   }
 
+  String _tendencyLabel(double positivePercent, double negativePercent) {
+    if (positivePercent + negativePercent < 1) return '—';
+    final diff = (positivePercent - negativePercent).abs();
+    if (diff < 15) return 'Balanced';
+    return positivePercent > negativePercent ? 'Mostly positive' : 'Mostly negative';
+  }
+
+  Color _tendencyColor(double positivePercent, double negativePercent) {
+    if (positivePercent + negativePercent < 1) return const Color(0xFFCDAF56);
+    final diff = (positivePercent - negativePercent).abs();
+    if (diff < 15) return const Color(0xFFCDAF56);
+    return positivePercent > negativePercent
+        ? const Color(0xFF4CAF50)
+        : const Color(0xFFE53935);
+  }
+
   Widget _buildSummaryCard(BuildContext context, bool isDark) {
     final weekly = _weeklySummary;
     final monthly = _monthlySummary;
@@ -636,8 +652,8 @@ class _MoodScreenState extends State<MoodScreen> {
               Expanded(
                 child: _MetricTile(
                   isDark: isDark,
-                  label: 'Weekly Avg',
-                  value: weekly.weeklyAverage.toStringAsFixed(1),
+                  label: 'This Week',
+                  value: weekly.mostFrequentMoodName ?? '—',
                   valueColor: const Color(0xFFCDAF56),
                 ),
               ),
@@ -645,8 +661,8 @@ class _MoodScreenState extends State<MoodScreen> {
               Expanded(
                 child: _MetricTile(
                   isDark: isDark,
-                  label: 'Monthly Avg',
-                  value: monthly.monthlyAverage.toStringAsFixed(1),
+                  label: 'This Month',
+                  value: monthly.mostFrequentMoodName ?? '—',
                   valueColor: const Color(0xFFCDAF56),
                 ),
               ),
@@ -658,74 +674,24 @@ class _MoodScreenState extends State<MoodScreen> {
               Expanded(
                 child: _MetricTile(
                   isDark: isDark,
-                  label: 'Positive',
-                  value: '${weekly.positivePercent.toStringAsFixed(0)}%',
-                  valueColor: const Color(0xFF4CAF50),
+                  label: 'Tendency',
+                  value: _tendencyLabel(weekly.positivePercent, weekly.negativePercent),
+                  valueColor: _tendencyColor(weekly.positivePercent, weekly.negativePercent),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: _MetricTile(
                   isDark: isDark,
-                  label: 'Negative',
-                  value: '${weekly.negativePercent.toStringAsFixed(0)}%',
-                  valueColor: const Color(0xFFE53935),
+                  label: 'Top Reason',
+                  value: weekly.mostFrequentReasonName ?? '—',
+                  valueColor: const Color(0xFFCDAF56),
                 ),
               ),
             ],
           ),
-          if (weekly.mostFrequentMoodName != null || weekly.mostFrequentReasonName != null) ...[
-            const SizedBox(height: 16),
-            Divider(
-              height: 1,
-              thickness: 0.5,
-              color: isDark ? Colors.white10 : Colors.black.withOpacity(0.05),
-            ),
-            const SizedBox(height: 12),
-            if (weekly.mostFrequentMoodName != null)
-              _buildSummaryInfoRow(
-                Icons.emoji_emotions_outlined,
-                'Common Mood',
-                weekly.mostFrequentMoodName!,
-                isDark,
-              ),
-            if (weekly.mostFrequentReasonName != null) ...[
-              const SizedBox(height: 8),
-              _buildSummaryInfoRow(
-                Icons.lightbulb_outline_rounded,
-                'Top Reason',
-                weekly.mostFrequentReasonName!,
-                isDark,
-              ),
-            ],
-          ],
         ],
       ),
-    );
-  }
-
-  Widget _buildSummaryInfoRow(IconData icon, String label, String value, bool isDark) {
-    return Row(
-      children: [
-        Icon(icon, size: 14, color: isDark ? Colors.white30 : Colors.black.withOpacity(0.3)),
-        const SizedBox(width: 8),
-        Text(
-          '$label: ',
-          style: TextStyle(
-            fontSize: 12,
-            color: isDark ? Colors.white38 : Colors.black45,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 12,
-            color: isDark ? Colors.white70 : Colors.black87,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ],
     );
   }
 
@@ -944,7 +910,7 @@ class _MoodScreenState extends State<MoodScreen> {
     final day = int.tryParse(dayKey.substring(6, 8));
     if (year == null || month == null || day == null) return dayKey;
     final date = DateTime(year, month, day);
-    return DateFormat('d').format(date);
+    return DateFormat('EEE').format(date);
   }
 
   String _formatTime(TimeOfDay time) {
@@ -1037,15 +1003,6 @@ class _TrendBar extends StatelessWidget {
     return Column(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        Text(
-          score == 0 ? '0' : (score > 0 ? '+$score' : '$score'),
-          style: TextStyle(
-            fontSize: 9,
-            fontWeight: FontWeight.w800,
-            color: color.withOpacity(0.8),
-          ),
-        ),
-        const SizedBox(height: 6),
         Container(
           width: 10,
           height: barHeight,
