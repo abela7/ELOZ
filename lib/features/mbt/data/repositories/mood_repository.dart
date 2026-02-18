@@ -13,7 +13,7 @@ import '../models/mood_reason.dart';
 ///
 /// Includes:
 /// - Config CRUD (moods, reasons)
-/// - Daily mood entry CRUD with one-primary-entry-per-day enforcement
+/// - Mood entry CRUD with multi-entry-per-day support (full timestamps)
 /// - Date index + daily summary + resumable backfill metadata
 class MoodRepository {
   static const int _indexVersion = 1;
@@ -274,10 +274,10 @@ class MoodRepository {
   // Entry CRUD
   // ---------------------------------------------------------------------------
 
-  /// Upserts the one primary mood entry for a date.
+  /// Adds a new mood entry (always creates; never overwrites).
   ///
-  /// If an active entry already exists on that day, it is updated in place.
-  Future<MoodEntry> upsertMoodEntryForDate({
+  /// Use [loggedAt] with full timestamp. Default to device time when logging.
+  Future<MoodEntry> addMoodEntry({
     required DateTime loggedAt,
     required String moodId,
     List<String>? reasonIds,
@@ -287,25 +287,44 @@ class MoodRepository {
     return _runIndexMutation(() async {
       await _ensureIndexesReady();
 
-      final existing = await getMoodEntryForDate(loggedAt);
       final now = DateTime.now();
       final box = await _getEntriesBox();
+      final created = MoodEntry(
+        moodId: moodId,
+        reasonIds: reasonIds ?? const [],
+        customNote: customNote,
+        loggedAt: loggedAt,
+        source: source,
+        createdAt: now,
+        updatedAt: now,
+      );
+      await box.put(created.id, created);
+      await _addEntryToIndexes(created);
+      return created;
+    });
+  }
 
-      if (existing == null) {
-        final created = MoodEntry(
-          moodId: moodId,
-          reasonIds: reasonIds ?? const [],
-          customNote: customNote,
-          loggedAt: loggedAt,
-          source: source,
-          createdAt: now,
-          updatedAt: now,
-        );
-        await box.put(created.id, created);
-        await _addEntryToIndexes(created);
-        return created;
+  /// Updates an existing mood entry in place.
+  Future<MoodEntry> updateMoodEntry({
+    required String id,
+    required DateTime loggedAt,
+    required String moodId,
+    List<String>? reasonIds,
+    String? customNote,
+    String source = 'manual',
+  }) async {
+    return _runIndexMutation(() async {
+      await _ensureIndexesReady();
+
+      final box = await _getEntriesBox();
+      final existing = box.get(id);
+      if (existing == null || existing.isDeleted) {
+        throw StateError('Mood entry not found: $id');
       }
 
+      await _removeEntryFromIndexes(existing);
+
+      final now = DateTime.now();
       final updated = existing.copyWith(
         moodId: moodId,
         reasonIds: reasonIds ?? const [],
@@ -315,8 +334,7 @@ class MoodRepository {
         updatedAt: now,
         deletedAt: null,
       );
-      await _removeEntryFromIndexes(existing);
-      await box.put(updated.id, updated);
+      await box.put(id, updated);
       await _addEntryToIndexes(updated);
       return updated;
     });
@@ -326,7 +344,17 @@ class MoodRepository {
     return (await _getEntriesBox()).get(entryId);
   }
 
+  /// Returns the most recent entry for the date (for backward compat).
   Future<MoodEntry?> getMoodEntryForDate(
+    DateTime date, {
+    bool includeDeleted = false,
+  }) async {
+    final entries = await getMoodEntriesForDate(date, includeDeleted: includeDeleted);
+    return entries.isEmpty ? null : entries.last;
+  }
+
+  /// Returns all entries for a date, sorted by [loggedAt] ascending.
+  Future<List<MoodEntry>> getMoodEntriesForDate(
     DateTime date, {
     bool includeDeleted = false,
   }) async {
@@ -339,26 +367,37 @@ class MoodRepository {
         !_indexMutationInProgress &&
         _useIndexedReads &&
         _isDateWithinIndexedRange(day)) {
-      final indexedId = (await _getDateIndexBox()).get(dayKey);
-      if (indexedId is! String || indexedId.isEmpty) {
-        return null;
+      final ids = _getIndexedEntryIds(await _getDateIndexBox(), dayKey);
+      final out = <MoodEntry>[];
+      for (final id in ids) {
+        final entry = entriesBox.get(id);
+        if (entry != null &&
+            !entry.isDeleted &&
+            _isSameDate(entry.loggedAt, day)) {
+          out.add(entry);
+        }
       }
-      final indexedEntry = entriesBox.get(indexedId);
-      if (indexedEntry == null) return null;
-      if (!_isSameDate(indexedEntry.loggedAt, day)) return null;
-      if (indexedEntry.isDeleted) return null;
-      return indexedEntry;
+      out.sort((a, b) => a.loggedAt.compareTo(b.loggedAt));
+      return out;
     }
 
-    MoodEntry? winner;
+    final out = <MoodEntry>[];
     for (final entry in entriesBox.values) {
       if (!_isSameDate(entry.loggedAt, day)) continue;
       if (!includeDeleted && entry.isDeleted) continue;
-      if (winner == null || _isPreferredEntry(entry, winner)) {
-        winner = entry;
-      }
+      out.add(entry);
     }
-    return winner;
+    out.sort((a, b) => a.loggedAt.compareTo(b.loggedAt));
+    return out;
+  }
+
+  /// Normalizes index value to List<String> (backward compat: String -> [s]).
+  List<String> _getIndexedEntryIds(Box<dynamic> indexBox, String dayKey) {
+    final raw = indexBox.get(dayKey);
+    if (raw == null) return [];
+    if (raw is String) return raw.isEmpty ? [] : [raw];
+    if (raw is List) return raw.cast<String>();
+    return [];
   }
 
   Future<List<MoodEntry>> getMoodEntriesInRange(
@@ -480,11 +519,8 @@ class MoodRepository {
     if (_indexMutationInProgress ||
         !_useIndexedReads ||
         !_isDateWithinIndexedRange(day)) {
-      final entry = await getMoodEntryForDate(day);
-      return _buildSummaryForEntry(
-        entry: entry,
-        moodLookup: await _moodLookup(),
-      );
+      final dayEntries = await getMoodEntriesForDate(day);
+      return _buildAggregatedSummary(dayEntries, await _moodLookup());
     }
     return _readSummaryMap((await _getDailySummaryBox()).get(_dateKey(day)));
   }
@@ -496,11 +532,12 @@ class MoodRepository {
     final summaries = <String, Map<String, dynamic>>{};
     final entries = await getMoodEntriesInRange(startDate, endDate);
     final moodLookup = await _moodLookup();
+    final byDay = <String, List<MoodEntry>>{};
     for (final entry in entries) {
-      summaries[_dateKey(entry.loggedAt)] = _buildSummaryForEntry(
-        entry: entry,
-        moodLookup: moodLookup,
-      );
+      byDay.putIfAbsent(_dateKey(entry.loggedAt), () => []).add(entry);
+    }
+    for (final e in byDay.entries) {
+      summaries[e.key] = _buildAggregatedSummary(e.value, moodLookup);
     }
     return summaries;
   }
@@ -558,24 +595,18 @@ class MoodRepository {
 
       final entries = await _scanChunkEntries(chunkStart, chunkEnd);
       final moodLookup = await _moodLookup();
-      final chunkWinners = <String, MoodEntry>{};
+      final entriesByDay = <String, List<MoodEntry>>{};
       for (final entry in entries) {
         final dateKey = _dateKey(entry.loggedAt);
-        final current = chunkWinners[dateKey];
-        if (current == null || _isPreferredEntry(entry, current)) {
-          chunkWinners[dateKey] = entry;
-        }
+        entriesByDay.putIfAbsent(dateKey, () => []).add(entry);
       }
 
-      final chunkIndex = <String, String>{};
+      final chunkIndex = <String, List<String>>{};
       final chunkSummary = <String, Map<String, dynamic>>{};
-      for (final winner in chunkWinners.values) {
-        final dateKey = _dateKey(winner.loggedAt);
-        chunkIndex[dateKey] = winner.id;
-        chunkSummary[dateKey] = _buildSummaryForEntry(
-          entry: winner,
-          moodLookup: moodLookup,
-        );
+      for (final e in entriesByDay.entries) {
+        e.value.sort((a, b) => a.loggedAt.compareTo(b.loggedAt));
+        chunkIndex[e.key] = e.value.map((x) => x.id).toList();
+        chunkSummary[e.key] = _buildAggregatedSummary(e.value, moodLookup);
       }
 
       if (chunkIndex.isNotEmpty) {
@@ -597,7 +628,6 @@ class MoodRepository {
 
   Future<void> _ensureIndexesReady() async {
     if (_indexesReady) return;
-    await _dedupeActiveEntriesByDate();
 
     final meta = await _getMetaBox();
     final version = _asInt(meta.get('version'));
@@ -652,7 +682,7 @@ class MoodRepository {
     final moodLookup = await _moodLookup();
 
     DateTime? oldestData;
-    final winnersByDay = <String, MoodEntry>{};
+    final entriesByDay = <String, List<MoodEntry>>{};
 
     var scanned = 0;
     for (final entry in entriesBox.values) {
@@ -660,32 +690,22 @@ class MoodRepository {
       if (scanned % _scanYieldInterval == 0) {
         await Future<void>.delayed(Duration.zero);
       }
-      if (entry.isDeleted) {
-        continue;
-      }
+      if (entry.isDeleted) continue;
       final day = _dateOnly(entry.loggedAt);
       if (oldestData == null || day.isBefore(oldestData)) {
         oldestData = day;
       }
-      if (day.isBefore(bootstrapFrom)) {
-        continue;
-      }
+      if (day.isBefore(bootstrapFrom)) continue;
       final dayKey = _dateKey(day);
-      final current = winnersByDay[dayKey];
-      if (current == null || _isPreferredEntry(entry, current)) {
-        winnersByDay[dayKey] = entry;
-      }
+      entriesByDay.putIfAbsent(dayKey, () => []).add(entry);
     }
 
-    final indexMap = <String, String>{};
+    final indexMap = <String, List<String>>{};
     final summaryMap = <String, Map<String, dynamic>>{};
-    for (final entry in winnersByDay.values) {
-      final dayKey = _dateKey(entry.loggedAt);
-      indexMap[dayKey] = entry.id;
-      summaryMap[dayKey] = _buildSummaryForEntry(
-        entry: entry,
-        moodLookup: moodLookup,
-      );
+    for (final e in entriesByDay.entries) {
+      e.value.sort((a, b) => a.loggedAt.compareTo(b.loggedAt));
+      indexMap[e.key] = e.value.map((x) => x.id).toList();
+      summaryMap[e.key] = _buildAggregatedSummary(e.value, moodLookup);
     }
     if (indexMap.isNotEmpty) {
       await indexBox.putAll(indexMap);
@@ -711,36 +731,6 @@ class MoodRepository {
     _useIndexedReads = true;
   }
 
-  Future<void> _dedupeActiveEntriesByDate() async {
-    final box = await _getEntriesBox();
-    final winnerByDate = <String, MoodEntry>{};
-    final toSoftDelete = <MoodEntry>[];
-    for (final entry in box.values) {
-      if (entry.isDeleted) continue;
-      final dateKey = _dateKey(entry.loggedAt);
-      final current = winnerByDate[dateKey];
-      if (current == null) {
-        winnerByDate[dateKey] = entry;
-        continue;
-      }
-      if (_isPreferredEntry(entry, current)) {
-        toSoftDelete.add(current);
-        winnerByDate[dateKey] = entry;
-      } else {
-        toSoftDelete.add(entry);
-      }
-    }
-
-    if (toSoftDelete.isEmpty) return;
-    final now = DateTime.now();
-    for (final duplicate in toSoftDelete) {
-      await box.put(
-        duplicate.id,
-        duplicate.copyWith(updatedAt: now, deletedAt: now),
-      );
-    }
-  }
-
   Future<bool> _hasValidIndexes() async {
     final entriesBox = await _getEntriesBox();
     if (entriesBox.isEmpty) return true;
@@ -750,36 +740,28 @@ class MoodRepository {
         _parseDateKey('${(await _getMetaBox()).get(_indexedFromMetaKey)}');
     if (indexedFrom == null) return false;
 
-    final expected = <String, MoodEntry>{};
+    final expectedByDay = <String, Set<String>>{};
     for (final entry in entriesBox.values) {
       if (entry.isDeleted) continue;
       final day = _dateOnly(entry.loggedAt);
       if (day.isBefore(indexedFrom)) continue;
-      final dateKey = _dateKey(day);
-      final current = expected[dateKey];
-      if (current == null || _isPreferredEntry(entry, current)) {
-        expected[dateKey] = entry;
-      }
+      expectedByDay.putIfAbsent(_dateKey(day), () => {}).add(entry.id);
     }
 
     final indexBox = await _getDateIndexBox();
-    var indexedCount = 0;
-    for (final value in indexBox.values) {
-      if (value is String && value.isNotEmpty) {
-        indexedCount++;
-      }
-    }
-    if (indexedCount != expected.length) return false;
-
-    for (final entry in expected.entries) {
-      final indexedId = indexBox.get(entry.key);
-      if (indexedId is! String || indexedId != entry.value.id) {
-        return false;
+    for (final e in expectedByDay.entries) {
+      final ids = _getIndexedEntryIds(indexBox, e.key);
+      if (ids.length != e.value.length) return false;
+      for (final id in ids) {
+        if (!e.value.contains(id)) return false;
+        final entry = entriesBox.get(id);
+        if (entry == null || entry.isDeleted) return false;
+        if (!_isSameDate(entry.loggedAt, _parseDateKey(e.key)!)) return false;
       }
     }
 
     final summaryBox = await _getDailySummaryBox();
-    if (summaryBox.length != expected.length) return false;
+    if (summaryBox.length != expectedByDay.length) return false;
     return true;
   }
 
@@ -790,8 +772,14 @@ class MoodRepository {
       return;
     }
     final dayKey = _dateKey(entry.loggedAt);
-    await (await _getDateIndexBox()).put(dayKey, entry.id);
-    await _writeSummaryForDate(dayKey, entry);
+    final indexBox = await _getDateIndexBox();
+    final ids = _getIndexedEntryIds(indexBox, dayKey);
+    if (!ids.contains(entry.id)) {
+      ids.add(entry.id);
+      await indexBox.put(dayKey, ids);
+    }
+    final entries = await _getEntriesForDay(dayKey);
+    await _writeAggregatedSummaryForDate(dayKey, entries);
   }
 
   Future<void> _removeEntryFromIndexes(MoodEntry entry) async {
@@ -800,29 +788,39 @@ class MoodRepository {
     }
     final day = _dateOnly(entry.loggedAt);
     final dayKey = _dateKey(day);
-    final nextWinner = await _findWinnerForDateExcluding(
-      day,
-      excludeId: entry.id,
-    );
     final indexBox = await _getDateIndexBox();
-    final summaryBox = await _getDailySummaryBox();
-    if (nextWinner == null) {
+    final ids = _getIndexedEntryIds(indexBox, dayKey);
+    ids.remove(entry.id);
+    if (ids.isEmpty) {
       await indexBox.delete(dayKey);
-      await summaryBox.delete(dayKey);
+      await (await _getDailySummaryBox()).delete(dayKey);
       return;
     }
-    await indexBox.put(dayKey, nextWinner.id);
-    final summary = _buildSummaryForEntry(
-      entry: nextWinner,
-      moodLookup: await _moodLookup(),
-    );
-    await summaryBox.put(dayKey, summary);
+    await indexBox.put(dayKey, ids);
+    final entries = await _getEntriesForDay(dayKey);
+    await _writeAggregatedSummaryForDate(dayKey, entries);
   }
 
-  Future<void> _writeSummaryForDate(String dayKey, MoodEntry entry) async {
-    final summary = _buildSummaryForEntry(
-      entry: entry,
-      moodLookup: await _moodLookup(),
+  Future<List<MoodEntry>> _getEntriesForDay(String dayKey) async {
+    final entriesBox = await _getEntriesBox();
+    final indexBox = await _getDateIndexBox();
+    final ids = _getIndexedEntryIds(indexBox, dayKey);
+    final out = <MoodEntry>[];
+    for (final id in ids) {
+      final entry = entriesBox.get(id);
+      if (entry != null && !entry.isDeleted) out.add(entry);
+    }
+    out.sort((a, b) => a.loggedAt.compareTo(b.loggedAt));
+    return out;
+  }
+
+  Future<void> _writeAggregatedSummaryForDate(
+    String dayKey,
+    List<MoodEntry> entries,
+  ) async {
+    final summary = _buildAggregatedSummary(
+      entries,
+      await _moodLookup(),
     );
     await (await _getDailySummaryBox()).put(dayKey, summary);
   }
@@ -830,17 +828,15 @@ class MoodRepository {
   Future<void> _rebuildSummaryForMood(String moodId) async {
     await _ensureIndexesReady();
     final indexBox = await _getDateIndexBox();
-    final entriesBox = await _getEntriesBox();
     final summaryBox = await _getDailySummaryBox();
     final moodLookup = await _moodLookup();
     for (final dateKey in indexBox.keys.map((k) => '$k')) {
-      final entryId = indexBox.get(dateKey);
-      if (entryId is! String || entryId.isEmpty) continue;
-      final entry = entriesBox.get(entryId);
-      if (entry == null || entry.moodId != moodId) continue;
+      final entries = await _getEntriesForDay(dateKey);
+      final hasMood = entries.any((e) => e.moodId == moodId);
+      if (!hasMood) continue;
       await summaryBox.put(
         dateKey,
-        _buildSummaryForEntry(entry: entry, moodLookup: moodLookup),
+        _buildAggregatedSummary(entries, moodLookup),
       );
     }
   }
@@ -856,9 +852,8 @@ class MoodRepository {
     final endOnly = _dateOnly(end);
     while (!day.isAfter(endOnly)) {
       final dayKey = _dateKey(day);
-      final entryId = indexBox.get(dayKey);
-      if (entryId is String && entryId.isNotEmpty) {
-        final entry = entriesBox.get(entryId);
+      for (final id in _getIndexedEntryIds(indexBox, dayKey)) {
+        final entry = entriesBox.get(id);
         if (entry != null &&
             !entry.isDeleted &&
             _isSameDate(entry.loggedAt, day)) {
@@ -867,6 +862,7 @@ class MoodRepository {
       }
       day = day.add(const Duration(days: 1));
     }
+    out.sort((a, b) => a.loggedAt.compareTo(b.loggedAt));
     return out;
   }
 
@@ -876,19 +872,14 @@ class MoodRepository {
     DateTime end, {
     required bool includeDeleted,
   }) {
-    final winners = <String, MoodEntry>{};
+    final out = <MoodEntry>[];
     for (final entry in entries) {
       if (!includeDeleted && entry.isDeleted) continue;
       final day = _dateOnly(entry.loggedAt);
       if (day.isBefore(start) || day.isAfter(end)) continue;
-      final dayKey = _dateKey(day);
-      final current = winners[dayKey];
-      if (current == null || _isPreferredEntry(entry, current)) {
-        winners[dayKey] = entry;
-      }
+      out.add(entry);
     }
-    final out = winners.values.toList()
-      ..sort((a, b) => a.loggedAt.compareTo(b.loggedAt));
+    out.sort((a, b) => a.loggedAt.compareTo(b.loggedAt));
     return out;
   }
 
@@ -909,22 +900,6 @@ class MoodRepository {
       entries.add(entry);
     }
     return entries;
-  }
-
-  Future<MoodEntry?> _findWinnerForDateExcluding(
-    DateTime day, {
-    String? excludeId,
-  }) async {
-    MoodEntry? winner;
-    for (final entry in (await _getEntriesBox()).values) {
-      if (entry.isDeleted) continue;
-      if (excludeId != null && entry.id == excludeId) continue;
-      if (!_isSameDate(entry.loggedAt, day)) continue;
-      if (winner == null || _isPreferredEntry(entry, winner)) {
-        winner = entry;
-      }
-    }
-    return winner;
   }
 
   Future<void> _markBackfillNeededForDate(DateTime date) async {
@@ -949,25 +924,45 @@ class MoodRepository {
     return map;
   }
 
-  Map<String, dynamic> _buildSummaryForEntry({
-    required MoodEntry? entry,
-    required Map<String, Mood> moodLookup,
-  }) {
-    if (entry == null || entry.isDeleted) {
-      return _emptySummary();
+  Map<String, dynamic> _buildAggregatedSummary(
+    List<MoodEntry> entries,
+    Map<String, Mood> moodLookup,
+  ) {
+    final valid = entries.where((e) => !e.isDeleted).toList();
+    if (valid.isEmpty) return _emptySummary();
+
+    var totalScore = 0;
+    var positiveCount = 0;
+    var negativeCount = 0;
+    final moodFrequency = <String, int>{};
+    final reasonIds = <String>{};
+
+    for (final entry in valid) {
+      final mood = moodLookup[entry.moodId];
+      final polarity = mood?.polarity ?? '';
+      final score = mood?.pointValue ?? 0;
+      totalScore += score;
+      if (polarity == MoodPolarity.good) positiveCount++;
+      if (polarity == MoodPolarity.bad) negativeCount++;
+      moodFrequency[entry.moodId] = (moodFrequency[entry.moodId] ?? 0) + 1;
+      reasonIds.addAll(entry.reasonIds);
     }
-    final mood = moodLookup[entry.moodId];
-    final polarity = mood?.polarity ?? '';
-    final score = mood?.pointValue ?? 0;
+
+    final avgScore = valid.isEmpty ? 0 : (totalScore / valid.length).round();
+    final topMoodId = moodFrequency.entries.isEmpty
+        ? null
+        : moodFrequency.entries
+            .reduce((a, b) => a.value >= b.value ? a : b)
+            .key;
+
     return <String, dynamic>{
-      'entryCount': 1,
-      'score': score,
-      'positiveCount': polarity == MoodPolarity.good ? 1 : 0,
-      'negativeCount': polarity == MoodPolarity.bad ? 1 : 0,
-      'moodId': entry.moodId,
-      // Store multi-reason list; keep legacy 'reasonId' for old cache compat.
-      'reasonIds': entry.reasonIds,
-      'reasonId': entry.reasonId ?? '',
+      'entryCount': valid.length,
+      'score': avgScore,
+      'positiveCount': positiveCount,
+      'negativeCount': negativeCount,
+      'moodId': topMoodId ?? valid.first.moodId,
+      'reasonIds': reasonIds.toList(),
+      'reasonId': reasonIds.isEmpty ? '' : reasonIds.first,
     };
   }
 
@@ -1005,22 +1000,6 @@ class MoodRepository {
       'reasonIds': reasonIds,
       'reasonId': reasonIds.isEmpty ? '' : reasonIds.first,
     };
-  }
-
-  bool _isPreferredEntry(MoodEntry candidate, MoodEntry current) {
-    final candidateLogged = candidate.loggedAt.millisecondsSinceEpoch;
-    final currentLogged = current.loggedAt.millisecondsSinceEpoch;
-    if (candidateLogged != currentLogged) {
-      return candidateLogged > currentLogged;
-    }
-    final candidateUpdated =
-        (candidate.updatedAt ?? candidate.createdAt).millisecondsSinceEpoch;
-    final currentUpdated =
-        (current.updatedAt ?? current.createdAt).millisecondsSinceEpoch;
-    if (candidateUpdated != currentUpdated) {
-      return candidateUpdated > currentUpdated;
-    }
-    return candidate.id.compareTo(current.id) > 0;
   }
 
   bool _isDateWithinIndexedRange(DateTime date) {

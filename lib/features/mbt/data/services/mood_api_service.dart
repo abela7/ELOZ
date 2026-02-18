@@ -215,9 +215,9 @@ class MoodApiService {
   // Logging (POST + GET by date/range)
   // ---------------------------------------------------------------------------
 
-  /// Logs the daily mood entry.
+  /// Adds a new mood entry (always creates; never overwrites).
   ///
-  /// One-primary-entry-per-day behavior: this upserts by day.
+  /// Uses [loggedAt] with full timestamp. Defaults to device time when omitted.
   Future<MoodEntry> postMoodEntry({
     required String moodId,
     List<String>? reasonIds,
@@ -249,7 +249,7 @@ class MoodApiService {
       }
     }
 
-    return _repository.upsertMoodEntryForDate(
+    return _repository.addMoodEntry(
       loggedAt: loggedAt ?? DateTime.now(),
       moodId: moodId,
       reasonIds: cleanIds.isEmpty ? null : cleanIds,
@@ -260,8 +260,74 @@ class MoodApiService {
     );
   }
 
+  /// Updates an existing mood entry.
+  Future<MoodEntry> updateMoodEntry({
+    required String entryId,
+    required String moodId,
+    List<String>? reasonIds,
+    String? customNote,
+    DateTime? loggedAt,
+    String source = 'manual',
+  }) async {
+    final existing = await _repository.getMoodEntryById(entryId);
+    if (existing == null || existing.isDeleted) {
+      throw StateError('Mood entry not found: $entryId');
+    }
+
+    final mood = await _repository.getMoodById(moodId);
+    if (mood == null || mood.isDeleted || !mood.isActive) {
+      throw StateError('Mood is missing or inactive: $moodId');
+    }
+
+    final cleanIds =
+        (reasonIds ?? <String>[]).where((r) => r.trim().isNotEmpty).toList();
+
+    if (mood.reasonRequired && cleanIds.isEmpty) {
+      throw const FormatException('This mood requires a reason.');
+    }
+
+    for (final reasonId in cleanIds) {
+      final reason = await _repository.getReasonById(reasonId);
+      if (reason == null || reason.isDeleted || !reason.isActive) {
+        throw StateError('Reason is missing or inactive: $reasonId');
+      }
+      if (reason.type != mood.polarity) {
+        throw FormatException(
+          'Reason type (${reason.type}) must match mood polarity (${mood.polarity}).',
+        );
+      }
+    }
+
+    return _repository.updateMoodEntry(
+      id: entryId,
+      loggedAt: loggedAt ?? existing.loggedAt,
+      moodId: moodId,
+      reasonIds: cleanIds.isEmpty ? null : cleanIds,
+      customNote: customNote?.trim().isEmpty == true
+          ? null
+          : customNote?.trim(),
+      source: source,
+    );
+  }
+
+  /// Soft-deletes a mood entry.
+  Future<bool> deleteMoodEntry(String entryId) async {
+    return _repository.softDeleteMoodEntry(entryId);
+  }
+
+  /// Returns an entry by ID.
+  Future<MoodEntry?> getMoodEntryById(String entryId) async {
+    return _repository.getMoodEntryById(entryId);
+  }
+
+  /// Returns the most recent entry for the date (for backward compat).
   Future<MoodEntry?> getMoodEntryByDate(DateTime date) async {
     return _repository.getMoodEntryForDate(date);
+  }
+
+  /// Returns all entries for a date, sorted by [loggedAt] ascending.
+  Future<List<MoodEntry>> getMoodEntriesForDate(DateTime date) async {
+    return _repository.getMoodEntriesForDate(date);
   }
 
   Future<List<MoodEntry>> getMoodEntriesByRange({
@@ -307,7 +373,10 @@ class MoodApiService {
       lifetimeRange.$2,
     );
 
-    final selectedEntriesCount = selectedSummary.length;
+    final selectedEntriesCount = selectedSummary.values.fold<int>(
+      0,
+      (sum, s) => sum + _asInt(s['entryCount']),
+    );
     final positiveCount = selectedSummary.values.fold<int>(
       0,
       (sum, summary) => sum + _asInt(summary['positiveCount']),

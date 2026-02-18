@@ -18,9 +18,17 @@ const _darkBorder = Color(0xFF3E4148);
 const _lightBg = Color(0xFFF9F7F2);
 
 class MoodLogScreen extends StatefulWidget {
-  const MoodLogScreen({super.key, required this.initialDate});
+  const MoodLogScreen({
+    super.key,
+    required this.initialDate,
+    this.entryId,
+  });
 
+  /// Date used when creating a new entry (ignored in edit mode).
   final DateTime initialDate;
+
+  /// When set, opens in edit mode for this entry.
+  final String? entryId;
 
   @override
   State<MoodLogScreen> createState() => _MoodLogScreenState();
@@ -37,6 +45,7 @@ class _MoodLogScreenState extends State<MoodLogScreen>
   String? _error;
 
   late DateTime _selectedDate;
+  TimeOfDay _selectedTime = TimeOfDay.now();
   List<Mood> _moods = const <Mood>[];
   List<MoodReason> _reasons = const <MoodReason>[];
   MoodEntry? _existingEntry;
@@ -70,11 +79,13 @@ class _MoodLogScreenState extends State<MoodLogScreen>
   @override
   void initState() {
     super.initState();
+    final now = DateTime.now();
     _selectedDate = DateTime(
       widget.initialDate.year,
       widget.initialDate.month,
       widget.initialDate.day,
     );
+    _selectedTime = TimeOfDay(hour: now.hour, minute: now.minute);
 
     _pulseController = AnimationController(
       vsync: this,
@@ -107,7 +118,11 @@ class _MoodLogScreenState extends State<MoodLogScreen>
     try {
       final moods = await _api.getMoods();
       final reasons = await _api.getReasons();
-      final entry = await _api.getMoodEntryByDate(_selectedDate);
+
+      MoodEntry? entry;
+      if (widget.entryId != null) {
+        entry = await _api.getMoodEntryById(widget.entryId!);
+      }
 
       String? selectedMoodId = entry?.moodId;
       if (selectedMoodId == null ||
@@ -136,6 +151,17 @@ class _MoodLogScreenState extends State<MoodLogScreen>
           ..addAll(validReasonIds);
         _noteController.text = entry?.customNote ?? '';
         _noteExpanded = (entry?.customNote ?? '').trim().isNotEmpty;
+        if (entry != null) {
+          _selectedDate = DateTime(
+            entry.loggedAt.year,
+            entry.loggedAt.month,
+            entry.loggedAt.day,
+          );
+          _selectedTime = TimeOfDay(
+            hour: entry.loggedAt.hour,
+            minute: entry.loggedAt.minute,
+          );
+        }
         _loading = false;
       });
     } catch (error) {
@@ -145,6 +171,16 @@ class _MoodLogScreenState extends State<MoodLogScreen>
         _loading = false;
       });
     }
+  }
+
+  DateTime _buildLoggedAt() {
+    return DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+      _selectedTime.hour,
+      _selectedTime.minute,
+    );
   }
 
   Future<void> _save() async {
@@ -160,14 +196,27 @@ class _MoodLogScreenState extends State<MoodLogScreen>
     }
     setState(() => _saving = true);
     try {
-      await _api.postMoodEntry(
-        moodId: moodId,
-        reasonIds: _selectedReasonIds.isEmpty
-            ? null
-            : _selectedReasonIds.toList(),
-        customNote: _noteController.text,
-        loggedAt: _selectedDate,
-      );
+      final loggedAt = _buildLoggedAt();
+      if (_existingEntry != null) {
+        await _api.updateMoodEntry(
+          entryId: _existingEntry!.id,
+          moodId: moodId,
+          reasonIds: _selectedReasonIds.isEmpty
+              ? null
+              : _selectedReasonIds.toList(),
+          customNote: _noteController.text,
+          loggedAt: loggedAt,
+        );
+      } else {
+        await _api.postMoodEntry(
+          moodId: moodId,
+          reasonIds: _selectedReasonIds.isEmpty
+              ? null
+              : _selectedReasonIds.toList(),
+          customNote: _noteController.text,
+          loggedAt: loggedAt,
+        );
+      }
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (error) {
@@ -346,7 +395,7 @@ class _MoodLogScreenState extends State<MoodLogScreen>
               if (picked != null && mounted) {
                 setState(() => _selectedDate =
                     DateTime(picked.year, picked.month, picked.day));
-                unawaited(_reload());
+                if (widget.entryId != null) unawaited(_reload());
               }
             },
             child: Container(
@@ -367,6 +416,56 @@ class _MoodLogScreenState extends State<MoodLogScreen>
                   const SizedBox(width: 6),
                   Text(
                     DateFormat('EEE, MMM d').format(_selectedDate),
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: isDark ? Colors.white : const Color(0xFF1E1E1E),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Time chip
+          GestureDetector(
+            onTap: () async {
+              final picked = await showTimePicker(
+                context: context,
+                initialTime: _selectedTime,
+                builder: (context, child) {
+                  return Theme(
+                    data: Theme.of(context).copyWith(
+                      colorScheme: Theme.of(context).colorScheme.copyWith(
+                        primary: _gold,
+                      ),
+                    ),
+                    child: child!,
+                  );
+                },
+              );
+              if (picked != null && mounted) {
+                setState(() => _selectedTime = picked);
+              }
+            },
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.06)
+                    : Colors.black.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.schedule_rounded,
+                      size: 14,
+                      color: isDark ? _gold : const Color(0xFF6E6E6E)),
+                  const SizedBox(width: 6),
+                  Text(
+                    _formatTime(_selectedTime),
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
@@ -1014,6 +1113,12 @@ class _MoodLogScreenState extends State<MoodLogScreen>
         ),
       ),
     );
+  }
+
+  String _formatTime(TimeOfDay t) {
+    final h = t.hourOfPeriod == 0 ? 12 : t.hourOfPeriod;
+    final m = t.minute.toString().padLeft(2, '0');
+    return t.period == DayPeriod.am ? '$h:$m AM' : '$h:$m PM';
   }
 
   void _snack(String message) {

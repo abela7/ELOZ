@@ -27,7 +27,7 @@ void main() {
   });
 
   group('MoodRepository indexing', () {
-    test('upserts one active entry per day', () async {
+    test('adds multiple entries per day', () async {
       final repository = _buildRepository();
       final moodA = await repository.createMood(
         _buildMood(name: 'Good', polarity: 'good', points: 2),
@@ -40,41 +40,46 @@ void main() {
       final dayMorning = DateTime(now.year, now.month, now.day, 9, 0);
       final dayEvening = DateTime(now.year, now.month, now.day, 20, 0);
 
-      final first = await repository.upsertMoodEntryForDate(
+      final first = await repository.addMoodEntry(
         loggedAt: dayMorning,
         moodId: moodA.id,
       );
-      final second = await repository.upsertMoodEntryForDate(
+      final second = await repository.addMoodEntry(
         loggedAt: dayEvening,
         moodId: moodB.id,
         customNote: 'Updated later',
       );
 
-      expect(second.id, first.id);
+      expect(second.id, isNot(first.id));
 
       final byDate = await repository.getMoodEntryForDate(dayMorning);
       expect(byDate, isNotNull);
       expect(byDate!.moodId, moodB.id);
       expect(byDate.customNote, 'Updated later');
 
+      final dayEntries = await repository.getMoodEntriesForDate(dayMorning);
+      expect(dayEntries.length, 2);
+      expect(dayEntries[0].id, first.id);
+      expect(dayEntries[1].id, second.id);
+
       final rangeEntries = await repository.getMoodEntriesInRange(
         dayMorning,
         dayMorning,
       );
-      expect(rangeEntries.length, 1);
-      expect(rangeEntries.first.id, first.id);
+      expect(rangeEntries.length, 2);
 
       final indexBox = await Hive.openBox<dynamic>(
         MbtModule.moodEntryDateIndexBoxName,
       );
-      expect(indexBox.get(_dateKey(dayMorning)), first.id);
+      final indexedIds = indexBox.get(_dateKey(dayMorning));
+      expect(indexedIds, isA<List>());
+      expect((indexedIds as List).length, 2);
 
       final summary = await repository.getDailySummary(dayMorning);
-      expect(summary['entryCount'], 1);
-      expect(summary['score'], -1);
+      expect(summary['entryCount'], 2);
+      expect(summary['score'], 1); // avg of 2 and -1
       expect(summary['negativeCount'], 1);
-      expect(summary['positiveCount'], 0);
-      expect(summary['moodId'], moodB.id);
+      expect(summary['positiveCount'], 1);
     });
 
     test(
@@ -121,7 +126,9 @@ void main() {
         final indexBox = await Hive.openBox<dynamic>(
           MbtModule.moodEntryDateIndexBoxName,
         );
-        expect(indexBox.get(_dateKey(recentDate)), 'recent_entry');
+        final recentIndexed = indexBox.get(_dateKey(recentDate));
+        expect(recentIndexed, isA<List>());
+        expect((recentIndexed as List), contains('recent_entry'));
         expect(indexBox.get(_dateKey(oldDate)), isNull);
 
         final status = await repository.getHistoryOptimizationStatus();
@@ -190,7 +197,7 @@ void main() {
       );
       final day = DateTime(2026, 2, 20, 10, 0);
 
-      final entry = await repository.upsertMoodEntryForDate(
+      final entry = await repository.addMoodEntry(
         loggedAt: day,
         moodId: mood.id,
       );
@@ -198,7 +205,9 @@ void main() {
       final indexBox = await Hive.openBox<dynamic>(
         MbtModule.moodEntryDateIndexBoxName,
       );
-      expect(indexBox.get(_dateKey(day)), entry.id);
+      final indexed = indexBox.get(_dateKey(day));
+      expect(indexed, isA<List>());
+      expect((indexed as List), contains(entry.id));
 
       final deleted = await repository.softDeleteMoodEntry(entry.id);
       expect(deleted, isTrue);
@@ -218,11 +227,11 @@ void main() {
     });
 
     test(
-      'dedupes duplicate active entries for the same day during index bootstrap',
+      'indexes multiple entries per day during bootstrap',
       () async {
         final repository = _buildRepository();
         final mood = await repository.createMood(
-          _buildMood(name: 'Restore Dedupe', polarity: 'good', points: 2),
+          _buildMood(name: 'Multi Entry', polarity: 'good', points: 2),
         );
         final day = DateTime(2026, 6, 9);
 
@@ -248,34 +257,28 @@ void main() {
           ),
         );
 
-        final winner = await repository.getMoodEntryForDate(day);
-        expect(winner, isNotNull);
-        expect(winner!.id, 'dup_b');
+        final latest = await repository.getMoodEntryForDate(day);
+        expect(latest, isNotNull);
+        expect(latest!.id, 'dup_b');
 
-        final allEntries = await repository.getAllMoodEntries(
-          includeDeleted: true,
-        );
-        final dayEntries = allEntries
-            .where(
-              (entry) =>
-                  entry.loggedAt.year == day.year &&
-                  entry.loggedAt.month == day.month &&
-                  entry.loggedAt.day == day.day,
-            )
-            .toList();
+        final dayEntries = await repository.getMoodEntriesForDate(day);
         expect(dayEntries.length, 2);
-        expect(dayEntries.where((entry) => !entry.isDeleted).length, 1);
-        expect(dayEntries.where((entry) => entry.isDeleted).length, 1);
+        expect(dayEntries[0].id, 'dup_a');
+        expect(dayEntries[1].id, 'dup_b');
 
         final indexBox = await Hive.openBox<dynamic>(
           MbtModule.moodEntryDateIndexBoxName,
         );
-        expect(indexBox.get(_dateKey(day)), 'dup_b');
+        final indexed = indexBox.get(_dateKey(day));
+        expect(indexed, isA<List>());
+        expect((indexed as List).length, 2);
+        expect((indexed as List), contains('dup_a'));
+        expect((indexed as List), contains('dup_b'));
       },
     );
 
     test(
-      'keeps entry/index/summary consistent when backfill overlaps with live upsert',
+      'keeps entry/index/summary consistent when backfill overlaps with live add',
       () async {
         final repository = _buildRepository();
         final mood = await repository.createMood(
@@ -309,7 +312,7 @@ void main() {
           targetDay,
           targetDay,
         );
-        final upsertFuture = repository.upsertMoodEntryForDate(
+        final addFuture = repository.addMoodEntry(
           loggedAt: DateTime(
             targetDay.year,
             targetDay.month,
@@ -322,23 +325,25 @@ void main() {
 
         final didBackfill = await backfillFuture;
         final rangeEntries = await readDuringBackfill;
-        final updated = await upsertFuture;
+        final added = await addFuture;
 
         expect(didBackfill, isTrue);
         expect(rangeEntries, isNotEmpty);
 
         final byDate = await repository.getMoodEntryForDate(targetDay);
         expect(byDate, isNotNull);
-        expect(byDate!.id, updated.id);
+        expect(byDate!.id, added.id);
         expect(byDate.customNote, 'live update');
 
         final indexBox = await Hive.openBox<dynamic>(
           MbtModule.moodEntryDateIndexBoxName,
         );
-        expect(indexBox.get(_dateKey(targetDay)), updated.id);
+        final indexed = indexBox.get(_dateKey(targetDay));
+        expect(indexed, isA<List>());
+        expect((indexed as List), contains(added.id));
 
         final summary = await repository.getDailySummary(targetDay);
-        expect(summary['entryCount'], 1);
+        expect(summary['entryCount'], 2); // hist_75 + added
         expect(summary['moodId'], mood.id);
       },
     );

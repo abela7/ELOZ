@@ -36,7 +36,7 @@ class _MoodScreenState extends State<MoodScreen> {
   DateTime _selectedDate = DateTime.now();
   List<Mood> _moods = const <Mood>[];
   List<MoodReason> _reasons = const <MoodReason>[];
-  MoodEntry? _selectedEntry;
+  List<MoodEntry> _selectedEntries = const [];
   MoodSummaryResponse? _weeklySummary;
   MoodSummaryResponse? _monthlySummary;
   MoodTrendsResponse? _monthlyTrends;
@@ -77,7 +77,7 @@ class _MoodScreenState extends State<MoodScreen> {
     try {
       final moodsFuture = _api.getMoods(includeInactive: true);
       final reasonsFuture = _api.getReasons(includeInactive: true);
-      final selectedEntryFuture = _api.getMoodEntryByDate(_selectedDate);
+      final selectedEntriesFuture = _api.getMoodEntriesForDate(_selectedDate);
       final weeklySummaryFuture = _api.getMoodSummary(range: MoodRange.weekly);
       final monthlySummaryFuture = _api.getMoodSummary(
         range: MoodRange.monthly,
@@ -87,7 +87,7 @@ class _MoodScreenState extends State<MoodScreen> {
 
       final moods = await moodsFuture;
       final reasons = await reasonsFuture;
-      final selectedEntry = await selectedEntryFuture;
+      final selectedEntries = await selectedEntriesFuture;
       final weeklySummary = await weeklySummaryFuture;
       final monthlySummary = await monthlySummaryFuture;
       final monthlyTrends = await monthlyTrendsFuture;
@@ -97,7 +97,7 @@ class _MoodScreenState extends State<MoodScreen> {
       setState(() {
         _moods = moods;
         _reasons = reasons;
-        _selectedEntry = selectedEntry;
+        _selectedEntries = selectedEntries;
         _weeklySummary = weeklySummary;
         _monthlySummary = monthlySummary;
         _monthlyTrends = monthlyTrends;
@@ -113,33 +113,64 @@ class _MoodScreenState extends State<MoodScreen> {
     }
   }
 
-  Future<void> _loadSelectedDateEntry() async {
+  Future<void> _loadSelectedDateEntries() async {
     try {
-      final entry = await _api.getMoodEntryByDate(_selectedDate);
+      final entries = await _api.getMoodEntriesForDate(_selectedDate);
       if (!mounted) return;
-      setState(() {
-        _selectedEntry = entry;
-      });
+      setState(() => _selectedEntries = entries);
     } catch (error) {
       if (!mounted) return;
-      setState(() {
-        _error = '$error';
-      });
+      setState(() => _error = '$error');
     }
   }
 
-  Future<void> _openLogScreen() async {
+  Future<void> _openLogScreen({String? entryId}) async {
     if (_activeMoods.isEmpty) {
       _showError('Add at least one active mood in Settings before logging.');
       return;
     }
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (context) => MoodLogScreen(initialDate: _selectedDate),
+        builder: (context) => MoodLogScreen(
+          initialDate: _selectedDate,
+          entryId: entryId,
+        ),
       ),
     );
     if (changed == true && mounted) {
       await _reload();
+    }
+  }
+
+  Future<void> _deleteEntry(MoodEntry entry) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Entry'),
+        content: const Text(
+          'Remove this mood entry? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    try {
+      await _api.deleteMoodEntry(entry.id);
+      if (mounted) await _loadSelectedDateEntries();
+    } catch (error) {
+      if (mounted) _showError('Failed to delete: $error');
     }
   }
 
@@ -157,7 +188,7 @@ class _MoodScreenState extends State<MoodScreen> {
       MaterialPageRoute(builder: (context) => const MoodReportScreen()),
     );
     if (mounted) {
-      await _loadSelectedDateEntry();
+      await _loadSelectedDateEntries();
     }
   }
 
@@ -266,13 +297,13 @@ class _MoodScreenState extends State<MoodScreen> {
                     HapticFeedback.selectionClick();
                     setState(() => _selectedDate =
                         _selectedDate.subtract(const Duration(days: 1)));
-                    unawaited(_loadSelectedDateEntry());
+                    unawaited(_loadSelectedDateEntries());
                   } else if (details.primaryVelocity != null &&
                       details.primaryVelocity! < -500) {
                     HapticFeedback.selectionClick();
                     setState(() => _selectedDate =
                         _selectedDate.add(const Duration(days: 1)));
-                    unawaited(_loadSelectedDateEntry());
+                    unawaited(_loadSelectedDateEntries());
                   }
                 },
                 child: ListView(
@@ -285,7 +316,7 @@ class _MoodScreenState extends State<MoodScreen> {
                         selectedDate: _selectedDate,
                         onDateChanged: (date) {
                           setState(() => _selectedDate = date);
-                          unawaited(_loadSelectedDateEntry());
+                          unawaited(_loadSelectedDateEntries());
                         },
                       ),
                     ),
@@ -372,12 +403,11 @@ class _MoodScreenState extends State<MoodScreen> {
   }
 
   Widget _buildTodayCard(BuildContext context, bool isDark) {
-    final entry = _selectedEntry;
-    final mood = entry == null ? null : _moodById[entry.moodId];
+    final entries = _selectedEntries;
 
     return _cardShell(
       isDark,
-      onTap: entry != null ? _openLogScreen : _openLogScreen,
+      onTap: _openLogScreen,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -404,7 +434,7 @@ class _MoodScreenState extends State<MoodScreen> {
             ],
           ),
           const SizedBox(height: 16),
-          if (entry == null)
+          if (entries.isEmpty)
             Row(
               children: [
                 Container(
@@ -426,7 +456,7 @@ class _MoodScreenState extends State<MoodScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'No record today',
+                        'No entries yet',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
@@ -435,7 +465,7 @@ class _MoodScreenState extends State<MoodScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Tap to log how you feel',
+                        'Tap to log your mood',
                         style: TextStyle(
                           fontSize: 13,
                           color: isDark ? Colors.white38 : Colors.black38,
@@ -451,128 +481,151 @@ class _MoodScreenState extends State<MoodScreen> {
                 ),
               ],
             )
-          else ...[
-            Row(
+          else
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        Color(mood?.colorValue ?? 0xFFCDAF56).withOpacity(isDark ? 0.25 : 0.15),
-                        Color(mood?.colorValue ?? 0xFFCDAF56).withOpacity(isDark ? 0.15 : 0.08),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: Color(mood?.colorValue ?? 0xFFCDAF56).withOpacity(isDark ? 0.3 : 0.2),
-                      width: 1,
-                    ),
-                  ),
-                  child: Center(
-                    child: mood != null && mood.emojiCodePoint != null
-                        ? Text(
-                            mood.emojiCharacter,
-                            style: const TextStyle(fontSize: 28),
-                          )
-                        : Icon(
-                            mood?.icon ?? Icons.hide_source_rounded,
-                            color: Color(mood?.colorValue ?? 0xFFCDAF56),
-                            size: 28,
-                          ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                for (final entry in entries)
+                  _buildTimelineEntry(context, isDark, entry),
+                const SizedBox(height: 8),
+                GestureDetector(
+                  onTap: () => _openLogScreen(),
+                  child: Row(
                     children: [
-                      Text(
-                        mood?.name ?? 'Missing mood',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.3,
-                          color: isDark ? Colors.white : Colors.black87,
-                        ),
+                      Icon(
+                        Icons.add_circle_outline_rounded,
+                        size: 18,
+                        color: const Color(0xFFCDAF56),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(width: 8),
                       Text(
-                        _formatReasons(entry, _reasonById),
+                        'Add another',
                         style: TextStyle(
                           fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: isDark ? Colors.white54 : Colors.black54,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xFFCDAF56),
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFFCDAF56), Color(0xFFE1C877)],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFFCDAF56).withOpacity(isDark ? 0.2 : 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    mood == null
-                        ? '0 pts'
-                        : '${mood.pointValue > 0 ? '+' : ''}${mood.pointValue} pts',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                      color: Color(0xFF1E1E1E),
-                      letterSpacing: 0.5,
-                    ),
                   ),
                 ),
               ],
             ),
-            if ((entry.customNote ?? '').trim().isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: isDark ? Colors.white.withOpacity(0.03) : const Color(0xFFF5F5F7),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
-                  ),
-                ),
-                child: Text(
-                  entry.customNote!.trim(),
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: isDark ? Colors.white60 : Colors.black54,
-                    height: 1.5,
-                    fontStyle: FontStyle.italic,
-                  ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimelineEntry(
+    BuildContext context,
+    bool isDark,
+    MoodEntry entry,
+  ) {
+    final mood = _moodById[entry.moodId];
+    final timeStr = DateFormat('h:mm a').format(entry.loggedAt);
+
+    return GestureDetector(
+      onTap: () => _openLogScreen(entryId: entry.id),
+      onLongPress: () => _deleteEntry(entry),
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 52,
+              child: Text(
+                timeStr,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? Colors.white38 : Colors.black45,
                 ),
               ),
-            ],
+            ),
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(mood?.colorValue ?? 0xFFCDAF56)
+                        .withOpacity(isDark ? 0.25 : 0.15),
+                    Color(mood?.colorValue ?? 0xFFCDAF56)
+                        .withOpacity(isDark ? 0.15 : 0.08),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Color(mood?.colorValue ?? 0xFFCDAF56)
+                      .withOpacity(isDark ? 0.3 : 0.2),
+                  width: 1,
+                ),
+              ),
+              child: Center(
+                child: mood != null && mood.emojiCodePoint != null
+                    ? Text(
+                        mood.emojiCharacter,
+                        style: const TextStyle(fontSize: 20),
+                      )
+                    : Icon(
+                        mood?.icon ?? Icons.hide_source_rounded,
+                        color: Color(mood?.colorValue ?? 0xFFCDAF56),
+                        size: 20,
+                      ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    mood?.name ?? 'Missing mood',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                  if (_formatReasons(entry, _reasonById).isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      _formatReasons(entry, _reasonById),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: isDark ? Colors.white54 : Colors.black54,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                  if ((entry.customNote ?? '').trim().isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      entry.customNote!.trim(),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontStyle: FontStyle.italic,
+                        color: isDark ? Colors.white38 : Colors.black38,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 18,
+              color: isDark ? Colors.white24 : Colors.black26,
+            ),
           ],
-        ],
+        ),
       ),
     );
   }
