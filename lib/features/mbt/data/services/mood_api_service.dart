@@ -473,7 +473,11 @@ class MoodApiService {
     final today = DateTime(now.year, now.month, now.day);
     switch (range) {
       case MoodRange.weekly:
-        return (today.subtract(const Duration(days: 6)), today);
+        final startOfWeek = today.subtract(
+          Duration(days: today.weekday - 1),
+        );
+        final endOfWeek = startOfWeek.add(const Duration(days: 6));
+        return (startOfWeek, endOfWeek);
       case MoodRange.monthly:
         return (DateTime(today.year, today.month, 1), today);
       case MoodRange.custom:

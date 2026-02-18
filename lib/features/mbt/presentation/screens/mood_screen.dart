@@ -12,7 +12,6 @@ import '../../data/models/mood_entry.dart';
 import '../../data/models/mood_reason.dart';
 import '../../data/services/mood_api_service.dart';
 import '../../mbt_module.dart';
-import '../../notifications/mbt_mood_notification_service.dart';
 import 'mood_log_screen.dart';
 import 'mood_report_screen.dart';
 import 'mood_settings_screen.dart';
@@ -26,11 +25,8 @@ class MoodScreen extends StatefulWidget {
 
 class _MoodScreenState extends State<MoodScreen> {
   final MoodApiService _api = MoodApiService();
-  final MbtMoodNotificationService _notificationService =
-      MbtMoodNotificationService();
 
   bool _loading = true;
-  bool _savingReminder = false;
   String? _error;
   int _moodFlowActiveIndex = 0;
   late final PageController _moodFlowController;
@@ -41,12 +37,7 @@ class _MoodScreenState extends State<MoodScreen> {
   List<MoodEntry> _selectedEntries = const [];
   MoodSummaryResponse? _weeklySummary;
   MoodSummaryResponse? _monthlySummary;
-  MoodTrendsResponse? _monthlyTrends;
-  MbtMoodReminderSettings _reminderSettings = const MbtMoodReminderSettings(
-    enabled: false,
-    hour: 20,
-    minute: 30,
-  );
+  MoodTrendsResponse? _weeklyTrends;
 
   Map<String, Mood> get _moodById => <String, Mood>{
     for (final mood in _moods) mood.id: mood,
@@ -91,16 +82,14 @@ class _MoodScreenState extends State<MoodScreen> {
       final monthlySummaryFuture = _api.getMoodSummary(
         range: MoodRange.monthly,
       );
-      final monthlyTrendsFuture = _api.getMoodTrends(range: MoodRange.monthly);
-      final reminderFuture = _notificationService.loadSettings();
+      final weeklyTrendsFuture = _api.getMoodTrends(range: MoodRange.weekly);
 
       final moods = await moodsFuture;
       final reasons = await reasonsFuture;
       final selectedEntries = await selectedEntriesFuture;
       final weeklySummary = await weeklySummaryFuture;
       final monthlySummary = await monthlySummaryFuture;
-      final monthlyTrends = await monthlyTrendsFuture;
-      final reminderSettings = await reminderFuture;
+      final weeklyTrends = await weeklyTrendsFuture;
 
       if (!mounted) return;
       setState(() {
@@ -109,8 +98,7 @@ class _MoodScreenState extends State<MoodScreen> {
         _selectedEntries = selectedEntries;
         _weeklySummary = weeklySummary;
         _monthlySummary = monthlySummary;
-        _monthlyTrends = monthlyTrends;
-        _reminderSettings = reminderSettings;
+        _weeklyTrends = weeklyTrends;
         _loading = false;
       });
     } catch (error) {
@@ -200,51 +188,6 @@ class _MoodScreenState extends State<MoodScreen> {
     );
     if (mounted) {
       await _loadSelectedDateEntries();
-    }
-  }
-
-  Future<void> _setReminderEnabled(bool enabled) async {
-    if (_savingReminder) return;
-    setState(() => _savingReminder = true);
-    try {
-      await _notificationService.setDailyReminder(
-        enabled: enabled,
-        time: _reminderSettings.time,
-      );
-      final updated = await _notificationService.loadSettings();
-      if (!mounted) return;
-      setState(() => _reminderSettings = updated);
-    } catch (error) {
-      _showError('Failed to update reminder: $error');
-    } finally {
-      if (mounted) {
-        setState(() => _savingReminder = false);
-      }
-    }
-  }
-
-  Future<void> _pickReminderTime() async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: _reminderSettings.time,
-    );
-    if (picked == null) return;
-
-    setState(() => _savingReminder = true);
-    try {
-      await _notificationService.setDailyReminder(
-        enabled: _reminderSettings.enabled,
-        time: picked,
-      );
-      final updated = await _notificationService.loadSettings();
-      if (!mounted) return;
-      setState(() => _reminderSettings = updated);
-    } catch (error) {
-      _showError('Failed to update reminder time: $error');
-    } finally {
-      if (mounted) {
-        setState(() => _savingReminder = false);
-      }
     }
   }
 
@@ -358,25 +301,11 @@ class _MoodScreenState extends State<MoodScreen> {
                       child: _buildSummaryCard(context, isDark),
                     ),
                     const SizedBox(height: 24),
-                    _buildSectionHeader("LAST 12 DAYS"),
+                    _buildSectionHeader("WEEKLY"),
                     const SizedBox(height: 12),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: _buildTrendCard(context, isDark),
-                    ),
-                    const SizedBox(height: 24),
-                    _buildSectionHeader("REMINDER"),
-                    const SizedBox(height: 12),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: _buildReminderCard(context, isDark),
-                    ),
-                    const SizedBox(height: 24),
-                    _buildSectionHeader("ACTIVE MOODS"),
-                    const SizedBox(height: 12),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: _buildMoodPaletteCard(context, isDark),
                     ),
                     if (_error?.trim().isNotEmpty == true) ...[
                       const SizedBox(height: 24),
@@ -1049,16 +978,22 @@ class _MoodScreenState extends State<MoodScreen> {
   }
 
   Widget _buildTrendCard(BuildContext context, bool isDark) {
-    final trends = _monthlyTrends;
-    if (trends == null || trends.dayScoreMap.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    final entries = trends.dayScoreMap.entries.toList();
-    final recent = entries.length <= 12
-        ? entries
-        : entries.sublist(entries.length - 12);
-    final maxAbs = recent
-        .map((entry) => entry.value.abs())
+    final trends = _weeklyTrends;
+    if (trends == null) return const SizedBox.shrink();
+
+    final now = DateTime.now();
+    final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+    final days = List.generate(7, (i) => startOfWeek.add(Duration(days: i)));
+    final dateFormat = DateFormat('yyyyMMdd');
+
+    final items = days.map((d) {
+      final key = dateFormat.format(d);
+      final score = trends.dayScoreMap[key] ?? 0;
+      return MapEntry(key, score);
+    }).toList();
+
+    final maxAbs = items
+        .map((e) => e.value.abs())
         .fold<int>(1, (a, b) => math.max(a, b));
 
     return _cardShell(
@@ -1068,7 +1003,7 @@ class _MoodScreenState extends State<MoodScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            for (final item in recent)
+            for (final item in items)
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 3),
@@ -1083,136 +1018,6 @@ class _MoodScreenState extends State<MoodScreen> {
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildReminderCard(BuildContext context, bool isDark) {
-    final subtitle = _reminderSettings.enabled
-        ? 'Daily at ${_formatTime(_reminderSettings.time)}'
-        : 'Disabled';
-
-    return _cardShell(
-      isDark,
-      child: Column(
-        children: [
-          SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            value: _reminderSettings.enabled,
-            activeColor: const Color(0xFFCDAF56),
-            title: Text(
-              'Daily reminder',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: isDark ? Colors.white : Colors.black87,
-              ),
-            ),
-            subtitle: Text(
-              'How was your day today?',
-              style: TextStyle(
-                fontSize: 13,
-                color: isDark ? Colors.white38 : Colors.black45,
-              ),
-            ),
-            onChanged: _savingReminder ? null : _setReminderEnabled,
-          ),
-          const SizedBox(height: 4),
-          Divider(
-            height: 1,
-            thickness: 0.5,
-            color: isDark ? Colors.white10 : Colors.black.withOpacity(0.05),
-          ),
-          const SizedBox(height: 4),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            enabled: _reminderSettings.enabled && !_savingReminder,
-            leading: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFCDAF56).withOpacity(isDark ? 0.15 : 0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.schedule_rounded,
-                size: 20,
-                color: Color(0xFFCDAF56),
-              ),
-            ),
-            title: const Text(
-              'Reminder time',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
-            trailing: const Icon(Icons.chevron_right_rounded, size: 20),
-            onTap: _reminderSettings.enabled ? _pickReminderTime : null,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMoodPaletteCard(BuildContext context, bool isDark) {
-    final moods = _activeMoods;
-    return _cardShell(
-      isDark,
-      child: moods.isEmpty
-          ? Text(
-              'No active moods. Add moods in Settings.',
-              style: TextStyle(
-                fontSize: 13,
-                color: isDark ? Colors.white38 : Colors.black45,
-              ),
-            )
-          : Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: moods
-                  .map(
-                    (mood) => Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Color(
-                          mood.colorValue,
-                        ).withOpacity(isDark ? 0.12 : 0.08),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Color(
-                            mood.colorValue,
-                          ).withOpacity(isDark ? 0.3 : 0.2),
-                          width: 1,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          mood.emojiCodePoint != null
-                              ? Text(
-                                  mood.emojiCharacter,
-                                  style: const TextStyle(fontSize: 16),
-                                )
-                              : Icon(
-                                  mood.icon,
-                                  size: 16,
-                                  color: Color(mood.colorValue),
-                                ),
-                          const SizedBox(width: 8),
-                          Text(
-                            mood.name,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: Color(mood.colorValue),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                  .toList(growable: false),
-            ),
     );
   }
 
@@ -1262,13 +1067,6 @@ class _MoodScreenState extends State<MoodScreen> {
     if (year == null || month == null || day == null) return dayKey;
     final date = DateTime(year, month, day);
     return DateFormat('EEE').format(date);
-  }
-
-  String _formatTime(TimeOfDay time) {
-    final hour = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
-    final minute = time.minute.toString().padLeft(2, '0');
-    final period = time.period == DayPeriod.am ? 'AM' : 'PM';
-    return '$hour:$minute $period';
   }
 
   void _showError(String message) {
