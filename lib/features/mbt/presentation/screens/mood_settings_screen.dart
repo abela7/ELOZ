@@ -1733,7 +1733,7 @@ class _MoodSettingsScreenState extends State<MoodSettingsScreen>
 
   Widget _buildReasonListItem(BuildContext context, MoodReason reason, bool isDark) {
     final accent = Color(reason.colorValue);
-    final hasIcon = reason.iconCodePoint > 0;
+    final hasIcon = reason.hasUserIcon;
     final hasEmoji = reason.emojiCharacter.isNotEmpty;
 
     return InkWell(

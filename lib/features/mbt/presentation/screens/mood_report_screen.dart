@@ -37,6 +37,7 @@ class _MoodReportScreenState extends State<MoodReportScreen>
   String? _error;
   _RangeOption _rangeOption = _RangeOption.daily;
   late DateTime _selectedDailyDate;
+  bool _showBarLines = false;
   DateTime _customFrom = DateTime.now().subtract(const Duration(days: 6));
   DateTime _customTo = DateTime.now();
 
@@ -424,6 +425,8 @@ class _MoodReportScreenState extends State<MoodReportScreen>
           _buildDailyHero(isDark, entries, avgMood, summary),
           const SizedBox(height: 16),
           _section(isDark, icon: Icons.timeline_rounded, title: 'MOOD FLOW',
+              trailing: entries.length >= 2
+                  ? _barLinesToggle(isDark) : null,
               onExpand: entries.length >= 2
                   ? () => _openMoodFlowFullscreen(isDark, entries)
                   : null,
@@ -697,7 +700,25 @@ class _MoodReportScreenState extends State<MoodReportScreen>
       List<FlSpot> spots, Map<int, String> timeLabels,
       Map<int, Mood?> moodAtIndex, double yBound,
       LinearGradient lineGradient,
-      {required String Function(int idx) tooltipLabel}) {
+      {required String Function(int idx) tooltipLabel,
+      bool showBarLines = false}) {
+    // Vertical bar lines from each dot to the 0-baseline
+    final verticalLines = <VerticalLine>[];
+    if (showBarLines) {
+      for (var i = 0; i < count; i++) {
+        final mood = moodAtIndex[i];
+        final c = mood != null
+            ? Color(mood.colorValue).withValues(alpha: 0.35)
+            : _kGold.withValues(alpha: 0.25);
+        verticalLines.add(VerticalLine(
+          x: i.toDouble(),
+          color: c,
+          strokeWidth: 2,
+          dashArray: [4, 3],
+        ));
+      }
+    }
+
     return LineChartData(
       minX: 0, maxX: (count - 1).toDouble(),
       minY: -yBound, maxY: yBound,
@@ -745,15 +766,18 @@ class _MoodReportScreenState extends State<MoodReportScreen>
           ),
         ),
       )],
-      extraLinesData: ExtraLinesData(horizontalLines: [
-        HorizontalLine(
-          y: 0,
-          color: (isDark ? Colors.white : Colors.black)
-              .withValues(alpha: 0.12),
-          strokeWidth: 1.2,
-          dashArray: [6, 4],
-        ),
-      ]),
+      extraLinesData: ExtraLinesData(
+        horizontalLines: [
+          HorizontalLine(
+            y: 0,
+            color: (isDark ? Colors.white : Colors.black)
+                .withValues(alpha: 0.12),
+            strokeWidth: 1.2,
+            dashArray: [6, 4],
+          ),
+        ],
+        verticalLines: verticalLines,
+      ),
       lineTouchData: LineTouchData(
         touchTooltipData: LineTouchTooltipData(
           tooltipBgColor: isDark ? const Color(0xFF2E3142) : Colors.white,
@@ -774,19 +798,8 @@ class _MoodReportScreenState extends State<MoodReportScreen>
         ),
       ),
       titlesData: FlTitlesData(
-        leftTitles: AxisTitles(sideTitles: SideTitles(
-          showTitles: true, reservedSize: 32,
-          interval: yBound > 3 ? (yBound / 3).ceilToDouble() : 1,
-          getTitlesWidget: (val, _) {
-            if (val == 0) return const SizedBox.shrink();
-            final mood = _moodForScore(val);
-            if (mood == null) return const SizedBox.shrink();
-            return SizedBox(
-              width: 28,
-              child: Center(child: _moodEmoji(mood, size: 16)),
-            );
-          },
-        )),
+        leftTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false)),
         bottomTitles: AxisTitles(sideTitles: SideTitles(
           showTitles: true, reservedSize: 40,
           interval: 1,
@@ -848,7 +861,8 @@ class _MoodReportScreenState extends State<MoodReportScreen>
     final chartData = _moodFlowChartData(isDark, entries.length, spots,
         labels, moodAtIndex, yBound, lineGradient,
         tooltipLabel: (i) =>
-            DateFormat('h:mm a').format(entries[i].loggedAt));
+            DateFormat('h:mm a').format(entries[i].loggedAt),
+        showBarLines: _showBarLines);
 
     final needsScroll = entries.length > 8;
     final chartWidth = needsScroll
@@ -910,56 +924,26 @@ class _MoodReportScreenState extends State<MoodReportScreen>
 
     Navigator.of(context).push<void>(MaterialPageRoute(
       fullscreenDialog: true,
-      builder: (_) {
-        final chartData = _moodFlowChartData(isDark, entries.length, spots,
-            allLabels, moodAtIndex, yBound, lineGradient,
+      builder: (_) => _MoodFlowFullscreen(
+        isDark: isDark,
+        title: 'Mood Flow',
+        subtitle: dateLabel,
+        entries: entries,
+        spots: spots,
+        allLabels: allLabels,
+        moodAtIndex: moodAtIndex,
+        yBound: yBound,
+        lineGradient: lineGradient,
+        chartW: chartW,
+        chartH: chartH,
+        chartDataBuilder: (showBars) => _moodFlowChartData(
+            isDark, entries.length, spots, allLabels, moodAtIndex,
+            yBound, lineGradient,
             tooltipLabel: (i) =>
-                DateFormat('h:mm a').format(entries[i].loggedAt));
-
-        return Scaffold(
-          backgroundColor: isDark
-              ? const Color(0xFF1A1D2E) : const Color(0xFFF8F6F1),
-          appBar: AppBar(
-            backgroundColor: Colors.transparent, elevation: 0,
-            leading: IconButton(
-              icon: Icon(Icons.close_rounded,
-                  color: isDark ? Colors.white70 : Colors.black54),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            title: Column(children: [
-              Text('Mood Flow',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800,
-                      color: isDark ? Colors.white : Colors.black87)),
-              Text(dateLabel,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
-                      color: isDark ? Colors.white38 : Colors.black38)),
-            ]),
-            centerTitle: true,
-            actions: [
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Icon(Icons.pinch_rounded, size: 18,
-                    color: isDark ? Colors.white24 : Colors.black26),
-              ),
-            ],
-          ),
-          body: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 12, 8, 16),
-              child: InteractiveViewer(
-                boundaryMargin: const EdgeInsets.all(40),
-                minScale: 0.8,
-                maxScale: 4.0,
-                child: SizedBox(
-                  width: chartW,
-                  height: chartH,
-                  child: LineChart(chartData),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+                DateFormat('h:mm a').format(entries[i].loggedAt),
+            showBarLines: showBars),
+        onClose: () => Navigator.of(context).pop(),
+      ),
     ));
   }
 
@@ -1041,6 +1025,8 @@ class _MoodReportScreenState extends State<MoodReportScreen>
         _buildHeroCard(isDark, summary, analytics),
         const SizedBox(height: 16),
         _section(isDark, icon: Icons.show_chart_rounded, title: 'MOOD TREND',
+            trailing: analytics.scoreTimeline.length >= 2
+                ? _barLinesToggle(isDark) : null,
             onExpand: analytics.scoreTimeline.length >= 2
                 ? () => _openTimelineFullscreen(isDark, analytics)
                 : null,
@@ -1048,7 +1034,7 @@ class _MoodReportScreenState extends State<MoodReportScreen>
         const SizedBox(height: 16),
         _section(isDark, icon: Icons.pie_chart_rounded,
             title: 'MOOD DISTRIBUTION',
-            child: _buildMoodPieChart(isDark, analytics)),
+            child: _buildMoodDistributionCarousel(isDark, analytics, summary)),
         const SizedBox(height: 16),
         _section(isDark, icon: Icons.balance_rounded,
             title: 'POSITIVE VS NEGATIVE',
@@ -1198,7 +1184,8 @@ class _MoodReportScreenState extends State<MoodReportScreen>
       {double height = 280}) {
     final chartData = _moodFlowChartData(isDark, spots.length, spots,
         xLabels, moodAtIndex, yBound, lineGradient,
-        tooltipLabel: (i) => timeline[i].label);
+        tooltipLabel: (i) => timeline[i].label,
+        showBarLines: _showBarLines);
 
     final needsScroll = spots.length > 10;
     final chartW = needsScroll
@@ -1264,59 +1251,60 @@ class _MoodReportScreenState extends State<MoodReportScreen>
 
     Navigator.of(context).push<void>(MaterialPageRoute(
       fullscreenDialog: true,
-      builder: (_) {
-        final chartData = _moodFlowChartData(isDark, spots.length, spots,
-            allLabels, moodAtIndex, yBound, lineGradient,
-            tooltipLabel: (i) => timeline[i].label);
-
-        return Scaffold(
-          backgroundColor:
-              isDark ? const Color(0xFF1A1D2E) : const Color(0xFFF8F6F1),
-          appBar: AppBar(
-            backgroundColor: Colors.transparent, elevation: 0,
-            leading: IconButton(
-              icon: Icon(Icons.close_rounded,
-                  color: isDark ? Colors.white70 : Colors.black54),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            title: Column(children: [
-              Text('Mood Trend',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800,
-                      color: isDark ? Colors.white : Colors.black87)),
-              Text(rangeLabel,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
-                      color: isDark ? Colors.white38 : Colors.black38)),
-            ]),
-            centerTitle: true,
-            actions: [
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Icon(Icons.pinch_rounded, size: 18,
-                    color: isDark ? Colors.white24 : Colors.black26),
-              ),
-            ],
-          ),
-          body: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 12, 8, 16),
-              child: InteractiveViewer(
-                boundaryMargin: const EdgeInsets.all(40),
-                minScale: 0.8,
-                maxScale: 4.0,
-                child: SizedBox(
-                  width: chartW,
-                  height: chartH,
-                  child: LineChart(chartData),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+      builder: (_) => _MoodFlowFullscreen(
+        isDark: isDark,
+        title: 'Mood Trend',
+        subtitle: rangeLabel,
+        spots: spots,
+        allLabels: allLabels,
+        moodAtIndex: moodAtIndex,
+        yBound: yBound,
+        lineGradient: lineGradient,
+        chartW: chartW,
+        chartH: chartH,
+        chartDataBuilder: (showBars) => _moodFlowChartData(
+            isDark, spots.length, spots, allLabels, moodAtIndex,
+            yBound, lineGradient,
+            tooltipLabel: (i) => timeline[i].label,
+            showBarLines: showBars),
+        onClose: () => Navigator.of(context).pop(),
+      ),
     ));
   }
 
-  // -- Mood distribution pie --
+  // -- Mood distribution carousel (breakdown | happy vs sad total) --
+
+  Widget _buildMoodDistributionCarousel(
+    bool isDark,
+    MoodAnalyticsResponse analytics,
+    MoodSummaryResponse summary,
+  ) {
+    final hasBreakdown = analytics.moodDistribution.isNotEmpty;
+    final totalPolarity =
+        (summary.positivePercent + summary.negativePercent).clamp(1.0, 100.0);
+    final hasTotal = totalPolarity > 0;
+
+    if (!hasBreakdown && !hasTotal) {
+      return _chartEmpty(isDark, 'No mood data');
+    }
+
+    final slides = <Widget>[];
+    final labels = <String>[];
+    if (hasBreakdown) {
+      slides.add(_buildMoodPieChart(isDark, analytics));
+      labels.add('Breakdown');
+    }
+    if (hasTotal) {
+      slides.add(_buildHappySadDonut(isDark, summary));
+      labels.add('Happy vs Sad');
+    }
+
+    return _MoodDistributionCarousel(
+      isDark: isDark,
+      slides: slides,
+      labels: labels,
+    );
+  }
 
   Widget _buildMoodPieChart(bool isDark, MoodAnalyticsResponse analytics) {
     if (analytics.moodDistribution.isEmpty) {
@@ -1371,6 +1359,73 @@ class _MoodReportScreenState extends State<MoodReportScreen>
     );
   }
 
+  Widget _buildHappySadDonut(bool isDark, MoodSummaryResponse summary) {
+    final pos = summary.positivePercent;
+    final neg = summary.negativePercent;
+    final total = (pos + neg).clamp(1.0, 100.0);
+    final pf = (pos / total * 100).round().clamp(0, 100);
+    final nf = 100 - pf;
+
+    final sections = <PieChartSectionData>[
+      if (pf > 0)
+        PieChartSectionData(
+          value: pf.toDouble(),
+          title: '',
+          color: _kPositive,
+          radius: 28,
+          showTitle: false,
+        ),
+      if (nf > 0)
+        PieChartSectionData(
+          value: nf.toDouble(),
+          title: '',
+          color: _kNegative,
+          radius: 28,
+          showTitle: false,
+        ),
+    ];
+
+    if (sections.isEmpty) {
+      return _chartEmpty(isDark, 'No polarity data');
+    }
+
+    return SizedBox(
+      height: 220,
+      child: Row(children: [
+        Expanded(flex: 4, child: PieChart(PieChartData(
+            sections: sections, sectionsSpace: 3, centerSpaceRadius: 36))),
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 6,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _happySadRow(isDark, '😊', 'Happy', pos, _kPositive),
+              const SizedBox(height: 12),
+              _happySadRow(isDark, '😔', 'Sad', neg, _kNegative),
+            ],
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _happySadRow(
+      bool isDark, String emoji, String label, double pct, Color color) {
+    return Row(children: [
+      Text(emoji, style: const TextStyle(fontSize: 20)),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(label,
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700,
+                color: isDark ? Colors.white70 : Colors.black54)),
+      ),
+      Text('${pct.toStringAsFixed(0)}%',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: color)),
+    ]);
+  }
+
   // -- Polarity bar --
 
   Widget _buildPolarityBar(bool isDark, MoodSummaryResponse summary) {
@@ -1420,13 +1475,15 @@ class _MoodReportScreenState extends State<MoodReportScreen>
     if (mood != null) {
       iconW = _moodEmoji(mood, size: 20);
     } else if (reason != null) {
-      final hasEmoji = reason.emojiCharacter.isNotEmpty;
-      iconW = hasEmoji
-          ? Text(reason.emojiCharacter, style: const TextStyle(fontSize: 20))
-          : (reason.iconCodePoint > 0
-              ? Icon(reason.icon, color: Color(reason.colorValue), size: 20)
-              : Icon(Icons.help_outline_rounded,
-                  color: Color(reason.colorValue), size: 20));
+      if (reason.hasUserIcon) {
+        iconW = Icon(reason.icon, color: Color(reason.colorValue), size: 20);
+      } else if (reason.emojiCharacter.isNotEmpty) {
+        iconW = Text(reason.emojiCharacter,
+            style: const TextStyle(fontSize: 20));
+      } else {
+        iconW = Icon(Icons.help_outline_rounded,
+            color: Color(reason.colorValue), size: 20);
+      }
     }
     return Container(
       padding: const EdgeInsets.all(12),
@@ -1496,10 +1553,12 @@ class _MoodReportScreenState extends State<MoodReportScreen>
 
       Widget? icon;
       if (reason != null) {
-        icon = reason.emojiCharacter.isNotEmpty
-            ? Text(reason.emojiCharacter, style: const TextStyle(fontSize: 16))
-            : (reason.iconCodePoint > 0
-                ? Icon(reason.icon, color: color, size: 16) : null);
+        if (reason.hasUserIcon) {
+          icon = Icon(reason.icon, color: color, size: 16);
+        } else if (reason.emojiCharacter.isNotEmpty) {
+          icon = Text(reason.emojiCharacter,
+              style: const TextStyle(fontSize: 16));
+        }
       }
 
       return Padding(
@@ -1750,7 +1809,7 @@ class _MoodReportScreenState extends State<MoodReportScreen>
 
   Widget _section(bool isDark, {required IconData icon,
       required String title, required Widget child,
-      VoidCallback? onExpand}) {
+      VoidCallback? onExpand, Widget? trailing}) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -1765,8 +1824,12 @@ class _MoodReportScreenState extends State<MoodReportScreen>
           Icon(icon, size: 16, color: _kGold),
           const SizedBox(width: 8),
           Text(title, style: _labelStyle()),
-          if (onExpand != null) ...[
-            const Spacer(),
+          const Spacer(),
+          if (trailing != null) ...[
+            trailing,
+            const SizedBox(width: 8),
+          ],
+          if (onExpand != null)
             GestureDetector(
               onTap: onExpand,
               child: Container(
@@ -1779,11 +1842,42 @@ class _MoodReportScreenState extends State<MoodReportScreen>
                     color: _kGold),
               ),
             ),
-          ],
         ]),
         const SizedBox(height: 14),
         child,
       ]),
+    );
+  }
+
+  Widget _barLinesToggle(bool isDark) {
+    return GestureDetector(
+      onTap: () => setState(() => _showBarLines = !_showBarLines),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: _showBarLines
+              ? _kGold.withValues(alpha: 0.18)
+              : (isDark ? Colors.white.withValues(alpha: 0.06)
+                  : Colors.black.withValues(alpha: 0.04)),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: _showBarLines
+                ? _kGold.withValues(alpha: 0.4)
+                : Colors.transparent,
+          ),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.bar_chart_rounded, size: 14,
+              color: _showBarLines ? _kGold
+                  : (isDark ? Colors.white30 : Colors.black26)),
+          const SizedBox(width: 4),
+          Text('Lines', style: TextStyle(
+              fontSize: 9, fontWeight: FontWeight.w700,
+              color: _showBarLines ? _kGold
+                  : (isDark ? Colors.white30 : Colors.black26))),
+        ]),
+      ),
     );
   }
 
@@ -1809,4 +1903,227 @@ class _MoodReportScreenState extends State<MoodReportScreen>
 
   TextStyle _labelStyle() => const TextStyle(fontSize: 11,
       fontWeight: FontWeight.w900, color: _kGold, letterSpacing: 1.2);
+}
+
+/// Fullscreen chart with its own bar-lines toggle.
+class _MoodFlowFullscreen extends StatefulWidget {
+  const _MoodFlowFullscreen({
+    required this.isDark,
+    required this.title,
+    required this.subtitle,
+    required this.spots,
+    required this.allLabels,
+    required this.moodAtIndex,
+    required this.yBound,
+    required this.lineGradient,
+    required this.chartW,
+    required this.chartH,
+    required this.chartDataBuilder,
+    required this.onClose,
+    this.entries,
+  });
+
+  final bool isDark;
+  final String title;
+  final String subtitle;
+  final List<MoodEntry>? entries;
+  final List<FlSpot> spots;
+  final Map<int, String> allLabels;
+  final Map<int, Mood?> moodAtIndex;
+  final double yBound;
+  final LinearGradient lineGradient;
+  final double chartW;
+  final double chartH;
+  final LineChartData Function(bool showBarLines) chartDataBuilder;
+  final VoidCallback onClose;
+
+  @override
+  State<_MoodFlowFullscreen> createState() => _MoodFlowFullscreenState();
+}
+
+class _MoodFlowFullscreenState extends State<_MoodFlowFullscreen> {
+  bool _showBars = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    final chartData = widget.chartDataBuilder(_showBars);
+
+    return Scaffold(
+      backgroundColor:
+          isDark ? const Color(0xFF1A1D2E) : const Color(0xFFF8F6F1),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent, elevation: 0,
+        leading: IconButton(
+          icon: Icon(Icons.close_rounded,
+              color: isDark ? Colors.white70 : Colors.black54),
+          onPressed: widget.onClose,
+        ),
+        title: Column(children: [
+          Text(widget.title,
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800,
+                  color: isDark ? Colors.white : Colors.black87)),
+          Text(widget.subtitle,
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
+                  color: isDark ? Colors.white38 : Colors.black38)),
+        ]),
+        centerTitle: true,
+        actions: [
+          GestureDetector(
+            onTap: () => setState(() => _showBars = !_showBars),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: const EdgeInsets.only(right: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: _showBars
+                    ? _kGold.withValues(alpha: 0.18)
+                    : (isDark ? Colors.white.withValues(alpha: 0.06)
+                        : Colors.black.withValues(alpha: 0.04)),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: _showBars
+                      ? _kGold.withValues(alpha: 0.4)
+                      : Colors.transparent,
+                ),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.bar_chart_rounded, size: 16,
+                    color: _showBars ? _kGold
+                        : (isDark ? Colors.white30 : Colors.black26)),
+                const SizedBox(width: 4),
+                Text('Lines', style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w700,
+                    color: _showBars ? _kGold
+                        : (isDark ? Colors.white30 : Colors.black26))),
+              ]),
+            ),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 12, 8, 16),
+          child: InteractiveViewer(
+            boundaryMargin: const EdgeInsets.all(40),
+            minScale: 0.8,
+            maxScale: 4.0,
+            child: SizedBox(
+              width: widget.chartW,
+              height: widget.chartH,
+              child: LineChart(chartData),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Carousel for mood distribution: breakdown and happy vs sad total.
+class _MoodDistributionCarousel extends StatefulWidget {
+  const _MoodDistributionCarousel({
+    required this.isDark,
+    required this.slides,
+    required this.labels,
+  });
+
+  final bool isDark;
+  final List<Widget> slides;
+  final List<String> labels;
+
+  @override
+  State<_MoodDistributionCarousel> createState() =>
+      _MoodDistributionCarouselState();
+}
+
+class _MoodDistributionCarouselState extends State<_MoodDistributionCarousel> {
+  late PageController _controller;
+  int _currentPage = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = PageController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    final slides = widget.slides;
+    final labels = widget.labels;
+
+    if (slides.length == 1) {
+      return slides.first;
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          height: 220,
+          child: PageView.builder(
+            controller: _controller,
+            itemCount: slides.length,
+            onPageChanged: (i) => setState(() => _currentPage = i),
+            itemBuilder: (context, i) => Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: slides[i],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(slides.length, (i) {
+            final active = i == _currentPage;
+            return GestureDetector(
+              onTap: () {
+                _controller.animateToPage(i,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeOutCubic);
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: active ? 20 : 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: active
+                            ? _kGold
+                            : (isDark
+                                ? Colors.white24
+                                : Colors.black26),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      labels[i],
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: active ? FontWeight.w800 : FontWeight.w500,
+                        color: active
+                            ? _kGold
+                            : (isDark ? Colors.white38 : Colors.black38),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
 }

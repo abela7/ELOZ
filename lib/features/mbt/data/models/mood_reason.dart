@@ -42,6 +42,11 @@ class MoodReason extends HiveObject {
   bool get isGood => type == MoodPolarity.good;
   bool get isBad => type == MoodPolarity.bad;
 
+  /// True only when the user explicitly chose a non-default icon.
+  /// The default icon code point is always stored, so we must distinguish
+  /// "user picked icon" from "still on the default placeholder."
+  bool get hasUserIcon => iconCodePoint != _defaultIconCodePoint;
+
   IconData get icon => IconData(
     iconCodePoint,
     fontFamily: 'MaterialIcons',

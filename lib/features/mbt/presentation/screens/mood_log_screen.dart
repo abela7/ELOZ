@@ -859,7 +859,7 @@ class _MoodLogScreenState extends State<MoodLogScreen>
   Widget _reasonChip(bool isDark, MoodReason reason) {
     final isSelected = _selectedReasonIds.contains(reason.id);
     final accent = Color(reason.colorValue);
-    final hasIcon = reason.iconCodePoint > 0;
+    final hasIcon = reason.hasUserIcon;
     final hasEmoji = reason.emojiCharacter.isNotEmpty;
 
     return GestureDetector(

@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart' show Color;
+
 import '../models/mood.dart';
 import '../models/mood_entry.dart';
 import '../models/mood_polarity.dart';
@@ -36,6 +38,67 @@ class MoodSummaryResponse {
   final String? mostFrequentMoodName;
   final String? mostFrequentReasonId;
   final String? mostFrequentReasonName;
+}
+
+/// Breakdown data for a snapshot tile -- shows how a result was calculated.
+/// Per-day summary for the mood calendar heatmap.
+class MoodCalendarDaySummary {
+  const MoodCalendarDaySummary({
+    required this.entryCount,
+    required this.avgScore,
+    required this.topMoodId,
+    required this.positiveCount,
+    required this.negativeCount,
+  });
+
+  final int entryCount;
+  final double avgScore;
+  final String? topMoodId;
+  final int positiveCount;
+  final int negativeCount;
+
+  bool get hasData => entryCount > 0;
+
+  /// Color based on dominant polarity.
+  Color get heatmapColor {
+    if (!hasData) return const Color(0xFFCDAF56);
+    if (positiveCount > negativeCount) return const Color(0xFF4CAF50);
+    if (negativeCount > positiveCount) return const Color(0xFFE53935);
+    return const Color(0xFFCDAF56); // balanced
+  }
+
+  /// Short text label for the polarity.
+  String get polarityLabel {
+    if (!hasData) return '—';
+    if (positiveCount > negativeCount) return '+';
+    if (negativeCount > positiveCount) return '−';
+    return '~';
+  }
+}
+
+class MoodSnapshotBreakdown {
+  const MoodSnapshotBreakdown({
+    required this.from,
+    required this.to,
+    required this.totalEntries,
+    required this.moodFrequency,
+    required this.reasonFrequency,
+    required this.positiveCount,
+    required this.negativeCount,
+  });
+
+  final DateTime from;
+  final DateTime to;
+  final int totalEntries;
+
+  /// Mood ID -> number of days it was the dominant mood.
+  final Map<String, int> moodFrequency;
+
+  /// Reason ID -> number of times it appeared across all entries.
+  final Map<String, int> reasonFrequency;
+
+  final int positiveCount;
+  final int negativeCount;
 }
 
 class MoodTrendsResponse {
@@ -513,6 +576,89 @@ class MoodApiService {
       mostFrequentReasonId: topReasonId,
       mostFrequentReasonName: topReasonName,
     );
+  }
+
+  Future<MoodSnapshotBreakdown> getSnapshotBreakdown({
+    required MoodRange range,
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    final resolved = await _resolveRange(range: range, from: from, to: to);
+    final summaries = await _repository.getDailySummaryMapInRange(
+        resolved.$1, resolved.$2);
+    final entries = await _repository.getMoodEntriesInRange(
+        resolved.$1, resolved.$2);
+
+    final moodFreq = <String, int>{};
+    for (final s in summaries.values) {
+      final moodId = '${s['moodId'] ?? ''}';
+      if (moodId.isNotEmpty) {
+        moodFreq[moodId] = (moodFreq[moodId] ?? 0) + 1;
+      }
+    }
+
+    final reasonFreq = <String, int>{};
+    for (final entry in entries) {
+      if (entry.isDeleted) continue;
+      for (final rid in entry.reasonIds) {
+        if (rid.isNotEmpty) {
+          reasonFreq[rid] = (reasonFreq[rid] ?? 0) + 1;
+        }
+      }
+    }
+
+    var posCount = 0;
+    var negCount = 0;
+    for (final s in summaries.values) {
+      posCount += _asInt(s['positiveCount']);
+      negCount += _asInt(s['negativeCount']);
+    }
+
+    final totalEntries = summaries.values.fold<int>(
+        0, (sum, s) => sum + _asInt(s['entryCount']));
+
+    return MoodSnapshotBreakdown(
+      from: resolved.$1,
+      to: resolved.$2,
+      totalEntries: totalEntries,
+      moodFrequency: moodFreq,
+      reasonFrequency: reasonFreq,
+      positiveCount: posCount,
+      negativeCount: negCount,
+    );
+  }
+
+  /// Returns per-day mood summaries for a calendar month, keyed by [DateTime]
+  /// at midnight. Also returns all active moods for rendering emoji/colors.
+  Future<({Map<DateTime, MoodCalendarDaySummary> days, List<Mood> moods})>
+      getMonthCalendarData(int year, int month) async {
+    final from = DateTime(year, month, 1);
+    final to = DateTime(year, month + 1, 0); // last day of month
+    final rawMapFuture = _repository.getDailySummaryMapInRange(from, to);
+    final moodsFuture = _repository.getMoods(includeInactive: true);
+    final rawMap = await rawMapFuture;
+    final moods = await moodsFuture;
+
+    final dayMap = <DateTime, MoodCalendarDaySummary>{};
+    for (final entry in rawMap.entries) {
+      // key is yyyyMMdd
+      final key = entry.key;
+      if (key.length != 8) continue;
+      final y = int.tryParse(key.substring(0, 4));
+      final m = int.tryParse(key.substring(4, 6));
+      final d = int.tryParse(key.substring(6, 8));
+      if (y == null || m == null || d == null) continue;
+      final date = DateTime(y, m, d);
+      final s = entry.value;
+      dayMap[date] = MoodCalendarDaySummary(
+        entryCount: _asInt(s['entryCount']),
+        avgScore: (_asInt(s['score'])).toDouble(),
+        topMoodId: '${s['moodId'] ?? ''}' == '' ? null : '${s['moodId']}',
+        positiveCount: _asInt(s['positiveCount']),
+        negativeCount: _asInt(s['negativeCount']),
+      );
+    }
+    return (days: dayMap, moods: moods);
   }
 
   Future<MoodTrendsResponse> getMoodTrends({
