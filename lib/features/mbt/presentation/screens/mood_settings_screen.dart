@@ -1121,6 +1121,11 @@ class _MoodSettingsScreenState extends State<MoodSettingsScreen>
     final nameController = TextEditingController(text: reason?.name ?? '');
     var type = reason?.type ?? MoodPolarity.good;
     var isActive = reason?.isActive ?? true;
+    var selectedIcon = reason != null
+        ? reason.icon
+        : Icons.lightbulb_outline_rounded;
+    var selectedColor = Color(reason?.colorValue ?? 0xFFCDAF56);
+    var selectedEmojiCodePoint = reason?.emojiCodePoint;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -1186,6 +1191,71 @@ class _MoodSettingsScreenState extends State<MoodSettingsScreen>
                       const SizedBox(height: 16),
                       _buildMoodFormCard(
                         isDark,
+                        sectionLabel: 'ICON',
+                        children: [
+                          _buildIconPickerTile(
+                            selectedIcon,
+                            selectedColor,
+                            isDark,
+                            onTap: () async {
+                              final icon = await showDialog<IconData>(
+                                context: context,
+                                builder: (ctx) => IconPickerWidget(
+                                  selectedIcon: selectedIcon,
+                                  isDark: isDark,
+                                ),
+                              );
+                              if (icon != null) {
+                                setDialogState(() => selectedIcon = icon);
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      _buildMoodFormCard(
+                        isDark,
+                        sectionLabel: 'COLOR',
+                        children: [
+                          _buildColorPickerTile(
+                            selectedColor,
+                            isDark,
+                            onTap: () async {
+                              final color = await showDialog<Color>(
+                                context: context,
+                                builder: (ctx) => ColorPickerWidget(
+                                  selectedColor: selectedColor,
+                                  isDark: isDark,
+                                ),
+                              );
+                              if (color != null) {
+                                setDialogState(() => selectedColor = color);
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      _buildMoodFormCard(
+                        isDark,
+                        sectionLabel: 'EMOJI',
+                        children: [
+                          _buildEmojiPickerTile(
+                            selectedEmojiCodePoint,
+                            selectedColor,
+                            isDark,
+                            onTap: (codePoint) => setDialogState(
+                              () => selectedEmojiCodePoint = codePoint,
+                            ),
+                            onClear: () => setDialogState(
+                              () => selectedEmojiCodePoint = null,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      _buildMoodFormCard(
+                        isDark,
                         sectionLabel: 'OPTIONS',
                         children: [
                           _buildMoodSwitch(
@@ -1215,6 +1285,9 @@ class _MoodSettingsScreenState extends State<MoodSettingsScreen>
                                 name: name,
                                 type: type,
                                 isActive: isActive,
+                                iconCodePoint: selectedIcon.codePoint,
+                                colorValue: selectedColor.toARGB32(),
+                                emojiCodePoint: selectedEmojiCodePoint,
                               );
                             } else {
                               await _api.putReason(
@@ -1222,6 +1295,11 @@ class _MoodSettingsScreenState extends State<MoodSettingsScreen>
                                 name: name,
                                 type: type,
                                 isActive: isActive,
+                                iconCodePoint: selectedIcon.codePoint,
+                                colorValue: selectedColor.toARGB32(),
+                                emojiCodePoint: selectedEmojiCodePoint,
+                                clearEmoji: selectedEmojiCodePoint == null &&
+                                    reason.emojiCodePoint != null,
                               );
                             }
                             if (!mounted || !context.mounted) return;
@@ -1654,8 +1732,10 @@ class _MoodSettingsScreenState extends State<MoodSettingsScreen>
   }
 
   Widget _buildReasonListItem(BuildContext context, MoodReason reason, bool isDark) {
-    final groupColor = reason.type == MoodPolarity.good ? const Color(0xFF4CAF50) : const Color(0xFFEF5350);
-    
+    final accent = Color(reason.colorValue);
+    final hasIcon = reason.iconCodePoint > 0;
+    final hasEmoji = reason.emojiCharacter.isNotEmpty;
+
     return InkWell(
       onTap: () => _showReasonDialog(reason: reason),
       borderRadius: BorderRadius.circular(16),
@@ -1675,15 +1755,22 @@ class _MoodSettingsScreenState extends State<MoodSettingsScreen>
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: groupColor.withValues(alpha: 0.1),
+                color: accent.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(
-                reason.type == MoodPolarity.good
-                    ? Icons.trending_up_rounded
-                    : Icons.trending_down_rounded,
-                size: 18,
-                color: groupColor,
+              child: Center(
+                child: hasIcon
+                    ? Icon(reason.icon, size: 20, color: accent)
+                    : hasEmoji
+                        ? Text(
+                            reason.emojiCharacter,
+                            style: const TextStyle(fontSize: 20),
+                          )
+                        : Icon(
+                            Icons.help_outline_rounded,
+                            size: 20,
+                            color: accent,
+                          ),
               ),
             ),
             const SizedBox(width: 12),

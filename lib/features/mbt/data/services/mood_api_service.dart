@@ -4,7 +4,7 @@ import '../models/mood_polarity.dart';
 import '../models/mood_reason.dart';
 import '../repositories/mood_repository.dart';
 
-enum MoodRange { weekly, monthly, custom, lifetime }
+enum MoodRange { daily, weekly, monthly, custom, lifetime }
 
 class MoodSummaryResponse {
   const MoodSummaryResponse({
@@ -48,6 +48,47 @@ class MoodTrendsResponse {
   final DateTime from;
   final DateTime to;
   final Map<String, int> dayScoreMap;
+}
+
+/// Rich analytics payload for the report screen charts.
+class MoodAnalyticsResponse {
+  const MoodAnalyticsResponse({
+    required this.from,
+    required this.to,
+    required this.moodDistribution,
+    required this.reasonDistribution,
+    required this.scoreTimeline,
+    required this.reasonTimeline,
+    required this.reasonMoodMatrix,
+    required this.highPoint,
+    required this.lowPoint,
+    required this.entriesCount,
+  });
+
+  final DateTime from;
+  final DateTime to;
+
+  /// Mood ID -> occurrence count.
+  final Map<String, int> moodDistribution;
+
+  /// Reason ID -> occurrence count.
+  final Map<String, int> reasonDistribution;
+
+  /// Bucketed score timeline: label -> average score.
+  /// Buckets are daily for <=60 days, weekly for <=365, monthly beyond that.
+  final List<({String label, double score})> scoreTimeline;
+
+  /// Top-5 reason IDs -> (bucket label -> count).
+  final Map<String, List<({String label, int count})>> reasonTimeline;
+
+  /// Reason ID -> Mood ID -> co-occurrence count.
+  final Map<String, Map<String, int>> reasonMoodMatrix;
+
+  /// Highest and lowest score points in the range.
+  final ({String label, double score})? highPoint;
+  final ({String label, double score})? lowPoint;
+
+  final int entriesCount;
 }
 
 /// Local API-style facade for the MBT Mood module.
@@ -127,7 +168,9 @@ class MoodApiService {
       iconCodePoint: iconCodePoint ?? existing.iconCodePoint,
       iconFontFamily: iconFontFamily ?? existing.iconFontFamily,
       iconFontPackage: iconFontPackage ?? existing.iconFontPackage,
-      emojiCodePoint: clearEmoji ? null : (emojiCodePoint ?? existing.emojiCodePoint),
+      emojiCodePoint: clearEmoji
+          ? null
+          : (emojiCodePoint ?? existing.emojiCodePoint),
       colorValue: colorValue ?? existing.colorValue,
       pointValue: pointValue ?? existing.pointValue,
       reasonRequired: reasonRequired ?? existing.reasonRequired,
@@ -157,6 +200,9 @@ class MoodApiService {
     required String name,
     required String type,
     bool isActive = true,
+    int? iconCodePoint,
+    int? colorValue,
+    int? emojiCodePoint,
   }) async {
     final normalizedName = name.trim();
     if (normalizedName.isEmpty) {
@@ -168,7 +214,14 @@ class MoodApiService {
       );
     }
     return _repository.createReason(
-      MoodReason(name: normalizedName, type: type, isActive: isActive),
+      MoodReason(
+        name: normalizedName,
+        type: type,
+        isActive: isActive,
+        iconCodePoint: iconCodePoint ?? 0xe3a5,
+        colorValue: colorValue ?? 0xFFCDAF56,
+        emojiCodePoint: emojiCodePoint,
+      ),
     );
   }
 
@@ -177,6 +230,10 @@ class MoodApiService {
     String? name,
     String? type,
     bool? isActive,
+    int? iconCodePoint,
+    int? colorValue,
+    int? emojiCodePoint,
+    bool clearEmoji = false,
   }) async {
     final existing = await _repository.getReasonById(reasonId);
     if (existing == null) {
@@ -186,6 +243,11 @@ class MoodApiService {
       name: name?.trim().isNotEmpty == true ? name!.trim() : existing.name,
       type: type ?? existing.type,
       isActive: isActive ?? existing.isActive,
+      iconCodePoint: iconCodePoint ?? existing.iconCodePoint,
+      colorValue: colorValue ?? existing.colorValue,
+      emojiCodePoint: clearEmoji
+          ? null
+          : (emojiCodePoint ?? existing.emojiCodePoint),
       updatedAt: DateTime.now(),
     );
     return _repository.updateReason(next);
@@ -230,8 +292,9 @@ class MoodApiService {
       throw StateError('Mood is missing or inactive: $moodId');
     }
 
-    final cleanIds =
-        (reasonIds ?? <String>[]).where((r) => r.trim().isNotEmpty).toList();
+    final cleanIds = (reasonIds ?? <String>[])
+        .where((r) => r.trim().isNotEmpty)
+        .toList();
 
     if (mood.reasonRequired && cleanIds.isEmpty) {
       throw const FormatException('This mood requires a reason.');
@@ -279,8 +342,9 @@ class MoodApiService {
       throw StateError('Mood is missing or inactive: $moodId');
     }
 
-    final cleanIds =
-        (reasonIds ?? <String>[]).where((r) => r.trim().isNotEmpty).toList();
+    final cleanIds = (reasonIds ?? <String>[])
+        .where((r) => r.trim().isNotEmpty)
+        .toList();
 
     if (mood.reasonRequired && cleanIds.isEmpty) {
       throw const FormatException('This mood requires a reason.');
@@ -350,28 +414,39 @@ class MoodApiService {
   }) async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final weeklyRange = (today.subtract(const Duration(days: 6)), today);
-    final monthlyRange = (DateTime(today.year, today.month, 1), today);
     final selectedRange = await _resolveRange(range: range, from: from, to: to);
-    final lifetimeRange = await _resolveRange(range: MoodRange.lifetime);
 
-    final todaySummary = await _repository.getDailySummary(today);
-    final weeklySummary = await _repository.getDailySummaryMapInRange(
-      weeklyRange.$1,
-      weeklyRange.$2,
-    );
-    final monthlySummary = await _repository.getDailySummaryMapInRange(
-      monthlyRange.$1,
-      monthlyRange.$2,
-    );
     final selectedSummary = await _repository.getDailySummaryMapInRange(
       selectedRange.$1,
       selectedRange.$2,
     );
-    final lifetimeSummary = await _repository.getDailySummaryMapInRange(
-      lifetimeRange.$1,
-      lifetimeRange.$2,
+    final selectedEntries = await _repository.getMoodEntriesInRange(
+      selectedRange.$1,
+      selectedRange.$2,
     );
+
+    // Only compute cross-range averages when actually needed (not for daily).
+    double weeklyAvg = 0, monthlyAvg = 0, lifetimeAvg = 0;
+    int dailyScore = 0;
+    if (range != MoodRange.daily) {
+      final todaySummary = await _repository.getDailySummary(today);
+      dailyScore = _asInt(todaySummary['score']);
+      final weeklyRange = (today.subtract(const Duration(days: 6)), today);
+      final monthlyRange = (DateTime(today.year, today.month, 1), today);
+      final lifetimeRange = await _resolveRange(range: MoodRange.lifetime);
+      final results = await Future.wait([
+        _repository.getDailySummaryMapInRange(weeklyRange.$1, weeklyRange.$2),
+        _repository.getDailySummaryMapInRange(monthlyRange.$1, monthlyRange.$2),
+        _repository.getDailySummaryMapInRange(
+            lifetimeRange.$1, lifetimeRange.$2),
+      ]);
+      weeklyAvg = _averageScore(results[0]);
+      monthlyAvg = _averageScore(results[1]);
+      lifetimeAvg = _averageScore(results[2]);
+    } else {
+      final todaySummary = await _repository.getDailySummary(today);
+      dailyScore = _asInt(todaySummary['score']);
+    }
 
     final selectedEntriesCount = selectedSummary.values.fold<int>(
       0,
@@ -394,12 +469,10 @@ class MoodApiService {
       if (moodId.isNotEmpty) {
         moodFrequency[moodId] = (moodFrequency[moodId] ?? 0) + 1;
       }
-      // Count every reason in the multi-reason list.
-      final rawIds = summary['reasonIds'];
-      final reasonIds = rawIds is List
-          ? rawIds.cast<String>()
-          : ['${summary['reasonId'] ?? ''}'];
-      for (final reasonId in reasonIds) {
+    }
+    for (final entry in selectedEntries) {
+      if (entry.isDeleted) continue;
+      for (final reasonId in entry.reasonIds) {
         if (reasonId.isNotEmpty) {
           reasonFrequency[reasonId] = (reasonFrequency[reasonId] ?? 0) + 1;
         }
@@ -424,10 +497,10 @@ class MoodApiService {
     return MoodSummaryResponse(
       from: selectedRange.$1,
       to: selectedRange.$2,
-      dailyScore: _asInt(todaySummary['score']),
-      weeklyAverage: _averageScore(weeklySummary),
-      monthlyAverage: _averageScore(monthlySummary),
-      lifetimeAverage: _averageScore(lifetimeSummary),
+      dailyScore: dailyScore,
+      weeklyAverage: weeklyAvg,
+      monthlyAverage: monthlyAvg,
+      lifetimeAverage: lifetimeAvg,
       positivePercent: totalPolarity == 0
           ? 0
           : (positiveCount / totalPolarity) * 100,
@@ -464,6 +537,207 @@ class MoodApiService {
     );
   }
 
+  /// Rich analytics for the report page charts.
+  ///
+  /// Performs a single-pass over entries and daily summaries, then buckets
+  /// scores smartly: daily for <=60 days, weekly for <=365, monthly beyond.
+  Future<MoodAnalyticsResponse> getMoodAnalytics({
+    required MoodRange range,
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    final resolved = await _resolveRange(range: range, from: from, to: to);
+    final startDate = resolved.$1;
+    final endDate = resolved.$2;
+    final totalDays = endDate.difference(startDate).inDays + 1;
+
+    final entries = await _repository.getMoodEntriesInRange(startDate, endDate);
+    final summaries = await _repository.getDailySummaryMapInRange(
+      startDate,
+      endDate,
+    );
+
+    // -- Single pass over entries for distributions + matrix --
+    final moodDist = <String, int>{};
+    final reasonDist = <String, int>{};
+    final reasonMoodMatrix = <String, Map<String, int>>{};
+
+    for (final entry in entries) {
+      if (entry.isDeleted) continue;
+      moodDist[entry.moodId] = (moodDist[entry.moodId] ?? 0) + 1;
+      for (final rid in entry.reasonIds) {
+        if (rid.isEmpty) continue;
+        reasonDist[rid] = (reasonDist[rid] ?? 0) + 1;
+        reasonMoodMatrix
+            .putIfAbsent(rid, () => <String, int>{})
+            .update(entry.moodId, (v) => v + 1, ifAbsent: () => 1);
+      }
+    }
+
+    // -- Build score timeline from daily summaries with smart bucketing --
+    final sortedKeys = summaries.keys.toList()..sort();
+    final rawDayScores = <({String key, double score})>[];
+    for (final key in sortedKeys) {
+      final s = summaries[key]!;
+      final ec = _asInt(s['entryCount']);
+      if (ec <= 0) continue;
+      rawDayScores.add((key: key, score: _asInt(s['score']).toDouble()));
+    }
+
+    final scoreTimeline = <({String label, double score})>[];
+    ({String label, double score})? highPoint;
+    ({String label, double score})? lowPoint;
+
+    if (totalDays <= 60) {
+      // Daily buckets
+      for (final d in rawDayScores) {
+        final label = _formatBucketLabel(d.key);
+        final point = (label: label, score: d.score);
+        scoreTimeline.add(point);
+        if (highPoint == null || d.score > highPoint.score) highPoint = point;
+        if (lowPoint == null || d.score < lowPoint.score) lowPoint = point;
+      }
+    } else if (totalDays <= 365) {
+      // Weekly buckets
+      _bucketScores(rawDayScores, 7, scoreTimeline);
+      for (final p in scoreTimeline) {
+        if (highPoint == null || p.score > highPoint.score) highPoint = p;
+        if (lowPoint == null || p.score < lowPoint.score) lowPoint = p;
+      }
+    } else {
+      // Monthly buckets
+      _bucketScoresMonthly(rawDayScores, scoreTimeline);
+      for (final p in scoreTimeline) {
+        if (highPoint == null || p.score > highPoint.score) highPoint = p;
+        if (lowPoint == null || p.score < lowPoint.score) lowPoint = p;
+      }
+    }
+
+    // -- Reason timeline: top 5 reasons bucketed the same way --
+    final top5Reasons =
+        (reasonDist.entries.toList()
+              ..sort((a, b) => b.value.compareTo(a.value)))
+            .take(5)
+            .map((e) => e.key)
+            .toList();
+
+    final reasonTimeline = <String, List<({String label, int count})>>{};
+    if (top5Reasons.isNotEmpty) {
+      // Build per-day counts for each top reason
+      final perDayReasonCounts = <String, Map<String, int>>{};
+      for (final rid in top5Reasons) {
+        perDayReasonCounts[rid] = <String, int>{};
+      }
+      for (final entry in entries) {
+        if (entry.isDeleted) continue;
+        for (final rid in entry.reasonIds) {
+          if (perDayReasonCounts.containsKey(rid)) {
+            perDayReasonCounts[rid]!.update(
+              entry.dayKey,
+              (v) => v + 1,
+              ifAbsent: () => 1,
+            );
+          }
+        }
+      }
+
+      for (final rid in top5Reasons) {
+        final dayMap = perDayReasonCounts[rid]!;
+        final rawReasonDays = <({String key, double score})>[];
+        for (final key in sortedKeys) {
+          rawReasonDays.add((key: key, score: (dayMap[key] ?? 0).toDouble()));
+        }
+
+        if (totalDays <= 60) {
+          reasonTimeline[rid] = rawReasonDays
+              .map(
+                (d) =>
+                    (label: _formatBucketLabel(d.key), count: d.score.round()),
+              )
+              .toList();
+        } else if (totalDays <= 365) {
+          final buckets = <({String label, double score})>[];
+          _bucketScores(rawReasonDays, 7, buckets);
+          reasonTimeline[rid] = buckets
+              .map((b) => (label: b.label, count: b.score.round()))
+              .toList();
+        } else {
+          final buckets = <({String label, double score})>[];
+          _bucketScoresMonthly(rawReasonDays, buckets);
+          reasonTimeline[rid] = buckets
+              .map((b) => (label: b.label, count: b.score.round()))
+              .toList();
+        }
+      }
+    }
+
+    return MoodAnalyticsResponse(
+      from: startDate,
+      to: endDate,
+      moodDistribution: moodDist,
+      reasonDistribution: reasonDist,
+      scoreTimeline: scoreTimeline,
+      reasonTimeline: reasonTimeline,
+      reasonMoodMatrix: reasonMoodMatrix,
+      highPoint: highPoint,
+      lowPoint: lowPoint,
+      entriesCount: entries.where((e) => !e.isDeleted).length,
+    );
+  }
+
+  void _bucketScores(
+    List<({String key, double score})> raw,
+    int bucketSize,
+    List<({String label, double score})> out,
+  ) {
+    for (var i = 0; i < raw.length; i += bucketSize) {
+      final chunk = raw.sublist(i, (i + bucketSize).clamp(0, raw.length));
+      final avg = chunk.fold<double>(0, (s, e) => s + e.score) / chunk.length;
+      out.add((label: _formatBucketLabel(chunk.first.key), score: avg));
+    }
+  }
+
+  void _bucketScoresMonthly(
+    List<({String key, double score})> raw,
+    List<({String label, double score})> out,
+  ) {
+    final groups = <String, List<double>>{};
+    for (final d in raw) {
+      final monthKey = d.key.substring(0, 6); // YYYYMM
+      groups.putIfAbsent(monthKey, () => []).add(d.score);
+    }
+    final sortedMonths = groups.keys.toList()..sort();
+    for (final mk in sortedMonths) {
+      final vals = groups[mk]!;
+      final avg = vals.fold<double>(0, (s, v) => s + v) / vals.length;
+      final y = mk.substring(0, 4);
+      final m = mk.substring(4, 6);
+      out.add((label: '$m/$y', score: avg));
+    }
+  }
+
+  String _formatBucketLabel(String dayKey) {
+    if (dayKey.length != 8) return dayKey;
+    final month = int.tryParse(dayKey.substring(4, 6)) ?? 1;
+    final day = int.tryParse(dayKey.substring(6, 8)) ?? 1;
+    const months = [
+      '',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${months[month]} $day';
+  }
+
   Future<(DateTime, DateTime)> _resolveRange({
     required MoodRange range,
     DateTime? from,
@@ -472,10 +746,10 @@ class MoodApiService {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     switch (range) {
+      case MoodRange.daily:
+        return (today, today);
       case MoodRange.weekly:
-        final startOfWeek = today.subtract(
-          Duration(days: today.weekday - 1),
-        );
+        final startOfWeek = today.subtract(Duration(days: today.weekday - 1));
         final endOfWeek = startOfWeek.add(const Duration(days: 6));
         return (startOfWeek, endOfWeek);
       case MoodRange.monthly:

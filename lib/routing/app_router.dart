@@ -8,6 +8,7 @@ import '../data/models/task.dart';
 import '../features/habits/presentation/screens/habits_screen.dart';
 import '../features/finance/presentation/screens/finances_screen.dart';
 import '../features/mbt/presentation/screens/mood_screen.dart';
+import '../features/behavior/presentation/screens/behavior_screen.dart';
 import '../features/sleep/presentation/screens/sleep_screen.dart';
 import '../features/stats/presentation/screens/stats_screen.dart';
 import '../features/more/presentation/screens/more_screen.dart';
@@ -34,6 +35,7 @@ class _RootScaffoldState extends State<RootScaffold> {
     if (location.startsWith('/habits')) return 2;
     if (location.startsWith('/finance')) return 3;
     if (location.startsWith('/mood')) return 6;
+    if (location.startsWith('/behavior')) return 6;
     if (location.startsWith('/sleep')) return 4;
     if (location.startsWith('/stats')) return 5;
     if (location.startsWith('/more')) return 6;
@@ -176,6 +178,11 @@ final appRouter = GoRouter(
           path: '/mood',
           name: 'mood',
           builder: (context, state) => const MoodScreen(),
+        ),
+        GoRoute(
+          path: '/behavior',
+          name: 'behavior',
+          builder: (context, state) => const BehaviorScreen(),
         ),
         GoRoute(
           path: '/sleep',

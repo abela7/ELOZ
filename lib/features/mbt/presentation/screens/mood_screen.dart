@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -15,6 +16,10 @@ import '../../mbt_module.dart';
 import 'mood_log_screen.dart';
 import 'mood_report_screen.dart';
 import 'mood_settings_screen.dart';
+
+const Color _kGold = Color(0xFFCDAF56);
+const Color _kPositive = Color(0xFF4CAF50);
+const Color _kNegative = Color(0xFFE53935);
 
 class MoodScreen extends StatefulWidget {
   const MoodScreen({super.key});
@@ -184,7 +189,10 @@ class _MoodScreenState extends State<MoodScreen> {
 
   Future<void> _openReportScreen() async {
     await Navigator.of(context).push<void>(
-      MaterialPageRoute(builder: (context) => const MoodReportScreen()),
+      MaterialPageRoute(
+        builder: (context) =>
+            MoodReportScreen(initialDate: _selectedDate),
+      ),
     );
     if (mounted) {
       await _loadSelectedDateEntries();
@@ -288,17 +296,23 @@ class _MoodScreenState extends State<MoodScreen> {
                     ),
                     const SizedBox(height: 12),
                     _buildMoodFlowSection(context, isDark),
+                    const SizedBox(height: 12),
+                    if (_selectedEntries.where((e) => !e.isDeleted).length >= 2)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: _buildDashboardMoodGraph(isDark),
+                      ),
                     const SizedBox(height: 20),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: _buildQuickActions(context, isDark),
                     ),
                     const SizedBox(height: 24),
-                    _buildSectionHeader("MOOD SNAPSHOT"),
+                    _buildSectionHeader("TODAY SO FAR"),
                     const SizedBox(height: 12),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: _buildSummaryCard(context, isDark),
+                      child: _buildDailyAverageMoodCard(context, isDark),
                     ),
                     const SizedBox(height: 24),
                     _buildSectionHeader("WEEKLY"),
@@ -328,6 +342,13 @@ class _MoodScreenState extends State<MoodScreen> {
                         ),
                       ),
                     ],
+                    const SizedBox(height: 24),
+                    _buildSectionHeader("MOOD SNAPSHOT"),
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: _buildSummaryCard(context, isDark),
+                    ),
                     const SizedBox(height: 40),
                   ],
                 ),
@@ -851,6 +872,347 @@ class _MoodScreenState extends State<MoodScreen> {
     );
   }
 
+  Mood? _moodForScore(double score) {
+    final candidates = _activeMoods;
+    if (candidates.isEmpty) return null;
+    Mood? best;
+    var bestDist = 999999.0;
+    for (final m in candidates) {
+      final dist = (m.pointValue - score).abs();
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = m;
+      }
+    }
+    return best;
+  }
+
+  Widget _moodEmojiWidget(Mood? mood, {double size = 28}) {
+    if (mood == null) {
+      return Icon(Icons.remove_rounded, size: size,
+          color: Colors.grey.withValues(alpha: 0.5));
+    }
+    if (mood.emojiCodePoint != null) {
+      return Text(mood.emojiCharacter, style: TextStyle(fontSize: size));
+    }
+    return Icon(mood.icon, color: Color(mood.colorValue), size: size);
+  }
+
+  /// Smart label picker for the dashboard graph.
+  Map<int, String> _dashSmartLabels(int count,
+      String Function(int) labelOf, {int maxLabels = 5}) {
+    final labels = <int, String>{};
+    if (count <= maxLabels) {
+      for (var i = 0; i < count; i++) labels[i] = labelOf(i);
+      return labels;
+    }
+    labels[0] = labelOf(0);
+    labels[count - 1] = labelOf(count - 1);
+    final step = (count / (maxLabels - 1)).ceil().clamp(2, count);
+    for (var i = step; i < count - 1; i += step) {
+      labels[i] = labelOf(i);
+    }
+    return labels;
+  }
+
+  LineChartData _dashChartData(bool isDark, List<MoodEntry> entries,
+      List<FlSpot> spots, Map<int, String> labels,
+      Map<int, Mood?> moodAtIndex, double yBound,
+      LinearGradient lineGradient) {
+    return LineChartData(
+      minX: 0, maxX: (entries.length - 1).toDouble(),
+      minY: -yBound, maxY: yBound,
+      clipData: const FlClipData.all(),
+      lineBarsData: [LineChartBarData(
+        spots: spots,
+        isCurved: true,
+        preventCurveOverShooting: true,
+        curveSmoothness: 0.35,
+        gradient: lineGradient,
+        barWidth: 3,
+        isStrokeCapRound: true,
+        shadow: Shadow(color: _kGold.withValues(alpha: 0.25),
+            blurRadius: 6, offset: const Offset(0, 3)),
+        dotData: FlDotData(
+          show: true,
+          getDotPainter: (spot, _, __, ___) {
+            final mood = moodAtIndex[spot.x.toInt()];
+            final c = mood != null ? Color(mood.colorValue) : _kGold;
+            return FlDotCirclePainter(
+              radius: 4.5, color: c, strokeWidth: 2,
+              strokeColor: isDark ? const Color(0xFF1E2030) : Colors.white,
+            );
+          },
+        ),
+        belowBarData: BarAreaData(
+          show: true, applyCutOffY: true, cutOffY: 0,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter, end: Alignment.bottomCenter,
+            colors: [
+              _kPositive.withValues(alpha: 0.16),
+              _kPositive.withValues(alpha: 0.02),
+            ],
+          ),
+        ),
+        aboveBarData: BarAreaData(
+          show: true, applyCutOffY: true, cutOffY: 0,
+          gradient: LinearGradient(
+            begin: Alignment.bottomCenter, end: Alignment.topCenter,
+            colors: [
+              _kNegative.withValues(alpha: 0.16),
+              _kNegative.withValues(alpha: 0.02),
+            ],
+          ),
+        ),
+      )],
+      extraLinesData: ExtraLinesData(horizontalLines: [
+        HorizontalLine(
+          y: 0,
+          color: (isDark ? Colors.white : Colors.black)
+              .withValues(alpha: 0.10),
+          strokeWidth: 1,
+          dashArray: [6, 4],
+        ),
+      ]),
+      lineTouchData: LineTouchData(
+        touchTooltipData: LineTouchTooltipData(
+          tooltipBgColor: isDark ? const Color(0xFF2E3142) : Colors.white,
+          tooltipRoundedRadius: 12,
+          tooltipPadding: const EdgeInsets.symmetric(
+              horizontal: 10, vertical: 6),
+          getTooltipItems: (touched) => touched.map((s) {
+            final idx = s.spotIndex;
+            final mood = moodAtIndex[idx];
+            final time = DateFormat('h:mm a')
+                .format(entries[idx].loggedAt);
+            final emojiStr = mood?.emojiCharacter ?? '';
+            return LineTooltipItem(
+              '$emojiStr ${mood?.name ?? '?'}\n$time',
+              TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                  color: isDark ? Colors.white : Colors.black87),
+            );
+          }).toList(),
+        ),
+      ),
+      titlesData: FlTitlesData(
+        leftTitles: AxisTitles(sideTitles: SideTitles(
+          showTitles: true, reservedSize: 30,
+          interval: yBound > 3 ? (yBound / 3).ceilToDouble() : 1,
+          getTitlesWidget: (val, _) {
+            if (val == 0) return const SizedBox.shrink();
+            final mood = _moodForScore(val);
+            if (mood == null) return const SizedBox.shrink();
+            return SizedBox(
+              width: 26,
+              child: Center(child: _moodEmojiWidget(mood, size: 13)),
+            );
+          },
+        )),
+        bottomTitles: AxisTitles(sideTitles: SideTitles(
+          showTitles: true, reservedSize: 36, interval: 1,
+          getTitlesWidget: (val, _) {
+            final label = labels[val.toInt()];
+            if (label == null) return const SizedBox.shrink();
+            return SideTitleWidget(
+              axisSide: AxisSide.bottom,
+              angle: -0.55,
+              child: Text(label, style: TextStyle(fontSize: 8,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? Colors.white38 : Colors.black38)),
+            );
+          },
+        )),
+        topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false)),
+        rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false)),
+      ),
+      gridData: FlGridData(
+        show: true, drawVerticalLine: false,
+        horizontalInterval:
+            yBound > 3 ? (yBound / 3).ceilToDouble() : 1,
+        getDrawingHorizontalLine: (_) => FlLine(
+          color: (isDark ? Colors.white : Colors.black)
+              .withValues(alpha: 0.04),
+          strokeWidth: 0.6,
+        ),
+      ),
+      borderData: FlBorderData(show: false),
+    );
+  }
+
+  Widget _buildDashboardMoodGraph(bool isDark) {
+    final entries = _selectedEntries
+        .where((e) => !e.isDeleted).toList()
+      ..sort((a, b) => a.loggedAt.compareTo(b.loggedAt));
+    if (entries.length < 2) return const SizedBox.shrink();
+
+    final spots = <FlSpot>[];
+    final moodAtIndex = <int, Mood?>{};
+    var yMax = 0.0;
+    var yMin = 0.0;
+
+    for (var i = 0; i < entries.length; i++) {
+      final entry = entries[i];
+      final mood = _moodById[entry.moodId];
+      final score = (mood?.pointValue ?? 0).toDouble();
+      spots.add(FlSpot(i.toDouble(), score));
+      moodAtIndex[i] = mood;
+      if (score > yMax) yMax = score;
+      if (score < yMin) yMin = score;
+    }
+
+    final absMax = yMax.abs() > yMin.abs() ? yMax.abs() : yMin.abs();
+    final yBound = (absMax + 1).ceilToDouble();
+    final lineGradient = LinearGradient(
+      begin: Alignment.topCenter, end: Alignment.bottomCenter,
+      colors: [_kPositive, _kGold, _kNegative],
+      stops: const [0.0, 0.5, 1.0],
+    );
+
+    final labels = _dashSmartLabels(entries.length,
+        (i) => DateFormat('h:mm a').format(entries[i].loggedAt));
+    final chartData = _dashChartData(isDark, entries, spots, labels,
+        moodAtIndex, yBound, lineGradient);
+
+    final needsScroll = entries.length > 8;
+    final chartW = needsScroll
+        ? (entries.length * 52.0).clamp(300.0, 3000.0) : double.infinity;
+
+    Widget chart;
+    if (!needsScroll) {
+      chart = SizedBox(height: 200, child: LineChart(chartData));
+    } else {
+      chart = SizedBox(
+        height: 200,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: SizedBox(
+            width: chartW, height: 200,
+            child: LineChart(chartData),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? Colors.white.withValues(alpha: 0.04) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: isDark ? null : [BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.show_chart_rounded, size: 14,
+                color: _kGold.withValues(alpha: 0.6)),
+            const SizedBox(width: 6),
+            Text('MOOD GRAPH', style: TextStyle(
+              fontSize: 10, fontWeight: FontWeight.w900,
+              color: isDark ? Colors.white38 : Colors.black38,
+              letterSpacing: 1.2,
+            )),
+            const Spacer(),
+            GestureDetector(
+              onTap: () => _openDashboardGraphFullscreen(isDark, entries,
+                  spots, moodAtIndex, yBound, lineGradient),
+              child: Container(
+                padding: const EdgeInsets.all(5),
+                decoration: BoxDecoration(
+                  color: _kGold.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(Icons.fullscreen_rounded, size: 16,
+                    color: _kGold),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 12),
+          chart,
+        ],
+      ),
+    );
+  }
+
+  void _openDashboardGraphFullscreen(bool isDark, List<MoodEntry> entries,
+      List<FlSpot> spots, Map<int, Mood?> moodAtIndex,
+      double yBound, LinearGradient lineGradient) {
+    final allLabels = <int, String>{};
+    for (var i = 0; i < entries.length; i++) {
+      allLabels[i] = DateFormat('h:mm a').format(entries[i].loggedAt);
+    }
+
+    final now = DateTime.now();
+    final todayOnly = DateTime(now.year, now.month, now.day);
+    final isToday = _selectedDate.year == todayOnly.year &&
+        _selectedDate.month == todayOnly.month &&
+        _selectedDate.day == todayOnly.day;
+    final dateLabel = isToday
+        ? 'Today'
+        : DateFormat('EEE, MMM d, yyyy').format(_selectedDate);
+
+    final screenW = MediaQuery.of(context).size.width;
+    final screenH = MediaQuery.of(context).size.height;
+    final chartH = screenH * 0.6;
+    final chartW = (entries.length * 72.0).clamp(screenW - 40, 6000.0);
+
+    Navigator.of(context).push<void>(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) {
+        final chartData = _dashChartData(isDark, entries, spots, allLabels,
+            moodAtIndex, yBound, lineGradient);
+        return Scaffold(
+          backgroundColor:
+              isDark ? const Color(0xFF1A1D2E) : const Color(0xFFF8F6F1),
+          appBar: AppBar(
+            backgroundColor: Colors.transparent, elevation: 0,
+            leading: IconButton(
+              icon: Icon(Icons.close_rounded,
+                  color: isDark ? Colors.white70 : Colors.black54),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            title: Column(children: [
+              Text('Mood Flow',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800,
+                      color: isDark ? Colors.white : Colors.black87)),
+              Text(dateLabel,
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
+                      color: isDark ? Colors.white38 : Colors.black38)),
+            ]),
+            centerTitle: true,
+            actions: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Icon(Icons.pinch_rounded, size: 18,
+                    color: isDark ? Colors.white24 : Colors.black26),
+              ),
+            ],
+          ),
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 12, 8, 16),
+              child: InteractiveViewer(
+                boundaryMargin: const EdgeInsets.all(40),
+                minScale: 0.8,
+                maxScale: 4.0,
+                child: SizedBox(
+                  width: chartW,
+                  height: chartH,
+                  child: LineChart(chartData),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    ));
+  }
+
   Widget _buildQuickActions(BuildContext context, bool isDark) {
     return Row(
       children: [
@@ -918,6 +1280,29 @@ class _MoodScreenState extends State<MoodScreen> {
       return const SizedBox.shrink();
     }
 
+    final weekMood = weekly.mostFrequentMoodId != null
+        ? _moodById[weekly.mostFrequentMoodId]
+        : null;
+    final monthMood = monthly.mostFrequentMoodId != null
+        ? _moodById[monthly.mostFrequentMoodId]
+        : null;
+    final tendencyLabel = _tendencyLabel(
+      weekly.positivePercent,
+      weekly.negativePercent,
+    );
+    final tendencyColor = _tendencyColor(
+      weekly.positivePercent,
+      weekly.negativePercent,
+    );
+    final tendencyEmoji = _tendencyEmoji(
+      weekly.positivePercent,
+      weekly.negativePercent,
+    );
+    final topReasonMood = weekly.mostFrequentReasonId != null
+        ? _reasonById[weekly.mostFrequentReasonId]
+        : null;
+    final topReasonName = weekly.mostFrequentReasonName ?? '—';
+
     return _cardShell(
       isDark,
       child: Column(
@@ -926,48 +1311,43 @@ class _MoodScreenState extends State<MoodScreen> {
           Row(
             children: [
               Expanded(
-                child: _MetricTile(
+                child: _SnapshotMoodTile(
                   isDark: isDark,
                   label: 'This Week',
-                  value: weekly.mostFrequentMoodName ?? '—',
-                  valueColor: const Color(0xFFCDAF56),
+                  moodName: weekly.mostFrequentMoodName ?? '—',
+                  mood: weekMood,
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(
-                child: _MetricTile(
+                child: _SnapshotMoodTile(
                   isDark: isDark,
                   label: 'This Month',
-                  value: monthly.mostFrequentMoodName ?? '—',
-                  valueColor: const Color(0xFFCDAF56),
+                  moodName: monthly.mostFrequentMoodName ?? '—',
+                  mood: monthMood,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
-                child: _MetricTile(
+                child: _SnapshotTendencyTile(
                   isDark: isDark,
                   label: 'Tendency',
-                  value: _tendencyLabel(
-                    weekly.positivePercent,
-                    weekly.negativePercent,
-                  ),
-                  valueColor: _tendencyColor(
-                    weekly.positivePercent,
-                    weekly.negativePercent,
-                  ),
+                  value: tendencyLabel,
+                  valueColor: tendencyColor,
+                  emoji: tendencyEmoji,
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(
-                child: _MetricTile(
+                child: _SnapshotReasonTile(
                   isDark: isDark,
                   label: 'Top Reason',
-                  value: weekly.mostFrequentReasonName ?? '—',
-                  valueColor: const Color(0xFFCDAF56),
+                  value: topReasonName,
+                  reason: topReasonMood,
                 ),
               ),
             ],
@@ -975,6 +1355,15 @@ class _MoodScreenState extends State<MoodScreen> {
         ],
       ),
     );
+  }
+
+  String _tendencyEmoji(double positive, double negative) {
+    final total = positive + negative;
+    if (total <= 0) return '😶';
+    final pRatio = positive / total;
+    if (pRatio >= 0.65) return '😊';
+    if (pRatio <= 0.35) return '😔';
+    return '😐';
   }
 
   Widget _buildTrendCard(BuildContext context, bool isDark) {
@@ -1018,6 +1407,145 @@ class _MoodScreenState extends State<MoodScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  /// Time-weighted average: recent entries matter more for "day so far".
+  Mood? _resolveDailyAverageMood(List<MoodEntry> entries) {
+    if (entries.isEmpty) return null;
+    final sorted = List<MoodEntry>.from(entries)
+      ..sort((a, b) => a.loggedAt.compareTo(b.loggedAt));
+    var weightedSum = 0.0;
+    var weightSum = 0.0;
+    for (var i = 0; i < sorted.length; i++) {
+      final mood = _moodById[sorted[i].moodId];
+      final pv = mood?.pointValue ?? 0;
+      final w = math.pow(0.75, sorted.length - 1 - i).toDouble();
+      weightedSum += pv * w;
+      weightSum += w;
+    }
+    if (weightSum <= 0) return null;
+    final avgPoint = (weightedSum / weightSum).round();
+    final candidates = _activeMoods;
+    if (candidates.isEmpty) return null;
+    Mood? best;
+    var bestDist = 999999;
+    for (final m in candidates) {
+      final dist = (m.pointValue - avgPoint).abs();
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = m;
+      }
+    }
+    return best;
+  }
+
+  Widget _buildDailyAverageMoodCard(BuildContext context, bool isDark) {
+    final entries = _selectedEntries;
+    final mood = _resolveDailyAverageMood(entries);
+    final now = DateTime.now();
+    final isToday = _selectedDate.year == now.year &&
+        _selectedDate.month == now.month &&
+        _selectedDate.day == now.day;
+    final label = isToday ? 'Your day so far' : 'Day average';
+    final emptyHint = isToday ? 'Log mood to see your day' : 'No entries';
+
+    return _cardShell(
+      isDark,
+      onTap: _openLogScreen,
+      child: mood == null
+          ? Row(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFCDAF56)
+                        .withOpacity(isDark ? 0.1 : 0.06),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Center(
+                    child: Text('😶', style: TextStyle(fontSize: 28)),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        label,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: isDark ? Colors.white70 : Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        emptyHint,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: isDark ? Colors.white38 : Colors.black45,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            )
+          : Row(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: Color(mood.colorValue)
+                        .withOpacity(isDark ? 0.15 : 0.1),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Center(
+                    child: mood.emojiCodePoint != null
+                        ? Text(
+                            mood.emojiCharacter,
+                            style: const TextStyle(fontSize: 28),
+                          )
+                        : Icon(
+                            mood.icon,
+                            color: Color(mood.colorValue),
+                            size: 28,
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        label,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white38 : Colors.black38,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        mood.name,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
     );
   }
 
@@ -1077,62 +1605,6 @@ class _MoodScreenState extends State<MoodScreen> {
   }
 }
 
-class _MetricTile extends StatelessWidget {
-  const _MetricTile({
-    required this.isDark,
-    required this.label,
-    required this.value,
-    required this.valueColor,
-  });
-
-  final bool isDark;
-  final String label;
-  final String value;
-  final Color valueColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-      decoration: BoxDecoration(
-        color: isDark
-            ? Colors.white.withOpacity(0.03)
-            : const Color(0xFFF5F5F7),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withOpacity(0.05)
-              : Colors.black.withOpacity(0.03),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              color: isDark ? Colors.white38 : Colors.black45,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.3,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-              color: valueColor,
-              letterSpacing: -0.5,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _TrendBar extends StatelessWidget {
   const _TrendBar({
     required this.isDark,
@@ -1181,6 +1653,264 @@ class _TrendBar extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SnapshotMoodTile extends StatelessWidget {
+  const _SnapshotMoodTile({
+    required this.isDark,
+    required this.label,
+    required this.moodName,
+    required this.mood,
+  });
+
+  final bool isDark;
+  final String label;
+  final String moodName;
+  final Mood? mood;
+
+  @override
+  Widget build(BuildContext context) {
+    final color =
+        mood != null ? Color(mood!.colorValue) : const Color(0xFFCDAF56);
+    final hasEmoji = mood?.emojiCodePoint != null;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            color.withOpacity(isDark ? 0.12 : 0.08),
+            color.withOpacity(isDark ? 0.04 : 0.02),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: color.withOpacity(isDark ? 0.15 : 0.1),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.0,
+              color: isDark ? Colors.white30 : Colors.black38,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: color.withOpacity(isDark ? 0.25 : 0.15),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: color.withOpacity(isDark ? 0.1 : 0.05),
+                  blurRadius: 12,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            child: Center(
+              child: hasEmoji
+                  ? Text(
+                      mood!.emojiCharacter,
+                      style: const TextStyle(fontSize: 32),
+                    )
+                  : Icon(
+                      mood?.icon ?? Icons.mood_rounded,
+                      color: color,
+                      size: 28,
+                    ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            moodName,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
+              color: isDark ? Colors.white : Colors.black87,
+            ),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SnapshotTendencyTile extends StatelessWidget {
+  const _SnapshotTendencyTile({
+    required this.isDark,
+    required this.label,
+    required this.value,
+    required this.valueColor,
+    required this.emoji,
+  });
+
+  final bool isDark;
+  final String label;
+  final String value;
+  final Color valueColor;
+  final String emoji;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+      decoration: BoxDecoration(
+        color: valueColor.withOpacity(isDark ? 0.08 : 0.05),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: valueColor.withOpacity(isDark ? 0.12 : 0.08),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.0,
+              color: isDark ? Colors.white30 : Colors.black38,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: valueColor.withOpacity(isDark ? 0.2 : 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: Text(emoji, style: const TextStyle(fontSize: 32)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
+              color: valueColor,
+            ),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SnapshotReasonTile extends StatelessWidget {
+  const _SnapshotReasonTile({
+    required this.isDark,
+    required this.label,
+    required this.value,
+    required this.reason,
+  });
+
+  final bool isDark;
+  final String label;
+  final String value;
+  final MoodReason? reason;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = reason != null
+        ? Color(reason!.colorValue)
+        : const Color(0xFFCDAF56);
+    final hasIcon = (reason?.iconCodePoint ?? 0) > 0;
+    final hasEmoji = reason?.emojiCharacter.isNotEmpty ?? false;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            accent.withOpacity(isDark ? 0.1 : 0.06),
+            accent.withOpacity(isDark ? 0.04 : 0.02),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: accent.withOpacity(isDark ? 0.12 : 0.08),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.0,
+              color: isDark ? Colors.white30 : Colors.black38,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: accent.withOpacity(isDark ? 0.2 : 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: hasIcon
+                  ? Icon(
+                      reason?.icon ?? Icons.help_outline_rounded,
+                      color: accent,
+                      size: 28,
+                    )
+                  : hasEmoji
+                      ? Text(
+                          reason!.emojiCharacter,
+                          style: const TextStyle(fontSize: 28),
+                        )
+                      : Icon(
+                          Icons.help_outline_rounded,
+                          color: accent,
+                          size: 28,
+                        ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
+              color: isDark ? Colors.white : Colors.black87,
+            ),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        ],
+      ),
     );
   }
 }

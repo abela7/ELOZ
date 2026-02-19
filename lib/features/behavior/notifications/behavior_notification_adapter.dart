@@ -78,6 +78,6 @@ class BehaviorNotificationAdapter implements MiniAppNotificationAdapter {
   Future<void> _openModuleLanding() async {
     final context = rootNavigatorKey.currentContext;
     if (context == null || !context.mounted) return;
-    GoRouter.of(context).go('/more');
+    GoRouter.of(context).go('/behavior');
   }
 }

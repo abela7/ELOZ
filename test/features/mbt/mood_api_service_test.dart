@@ -443,9 +443,10 @@ _RawStats _rawStats(
       negative++;
     }
     moodFrequency[entry.moodId] = (moodFrequency[entry.moodId] ?? 0) + 1;
-    if ((entry.reasonId ?? '').isNotEmpty) {
-      final reasonId = entry.reasonId!;
-      reasonFrequency[reasonId] = (reasonFrequency[reasonId] ?? 0) + 1;
+    for (final reasonId in entry.reasonIds) {
+      if (reasonId.isNotEmpty) {
+        reasonFrequency[reasonId] = (reasonFrequency[reasonId] ?? 0) + 1;
+      }
     }
   }
 

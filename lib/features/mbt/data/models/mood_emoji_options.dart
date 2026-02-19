@@ -17,9 +17,14 @@ const List<int> moodEmojiCodePoints = [
 ];
 
 /// Converts code point to display string. Handles invalid values safely.
+/// Supports supplementary plane (U+10000..U+10FFFF) via surrogate pairs;
+/// [String.fromCharCode] alone only handles BMP (≤U+FFFF) and breaks emojis.
 String emojiFromCodePoint(int codePoint) {
   if (codePoint <= 0 || codePoint > 0x10FFFF) return '';
-  return String.fromCharCode(codePoint);
+  if (codePoint <= 0xFFFF) return String.fromCharCode(codePoint);
+  final high = 0xD800 + ((codePoint - 0x10000) >> 10);
+  final low = 0xDC00 + ((codePoint - 0x10000) & 0x3FF);
+  return String.fromCharCodes([high, low]);
 }
 
 /// Extracts primary Unicode code point from emoji string (e.g. from picker).

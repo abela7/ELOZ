@@ -858,8 +858,9 @@ class _MoodLogScreenState extends State<MoodLogScreen>
 
   Widget _reasonChip(bool isDark, MoodReason reason) {
     final isSelected = _selectedReasonIds.contains(reason.id);
-    final accent =
-        reason.isGood ? const Color(0xFF66BB6A) : const Color(0xFFEF5350);
+    final accent = Color(reason.colorValue);
+    final hasIcon = reason.iconCodePoint > 0;
+    final hasEmoji = reason.emojiCharacter.isNotEmpty;
 
     return GestureDetector(
       onTap: () {
@@ -906,6 +907,13 @@ class _MoodLogScreenState extends State<MoodLogScreen>
                       size: 16,
                       color: isDark ? Colors.white24 : Colors.black26),
             ),
+            const SizedBox(width: 8),
+            if (hasIcon)
+              Icon(reason.icon, size: 16, color: accent)
+            else if (hasEmoji)
+              Text(reason.emojiCharacter, style: const TextStyle(fontSize: 16))
+            else
+              Icon(Icons.help_outline_rounded, size: 16, color: accent),
             const SizedBox(width: 8),
             Text(
               reason.name,

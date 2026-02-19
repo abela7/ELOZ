@@ -6,6 +6,7 @@ import '../../../../core/theme/color_schemes.dart';
 import '../../../notifications_hub/presentation/screens/notification_hub_screen.dart';
 import '../../../tasks/presentation/screens/settings/notification_settings_screen.dart';
 import '../../../mbt/presentation/screens/mood_screen.dart';
+import '../../../behavior/presentation/screens/behavior_screen.dart';
 import 'comprehensive_data_backup_screen.dart';
 
 /// More Screen - Menu for other mini apps and settings
@@ -42,6 +43,17 @@ class MoreScreen extends StatelessWidget {
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) => const MoodScreen(),
+                    ),
+                  ),
+                ),
+                _MenuTile(
+                  icon: Icons.track_changes_rounded,
+                  title: 'Behavior Tracker',
+                  subtitle: 'Track behavior events and reasons',
+                  color: Colors.teal,
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const BehaviorScreen(),
                     ),
                   ),
                 ),

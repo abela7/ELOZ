@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:uuid/uuid.dart';
 
+import 'mood_emoji_options.dart';
 import 'mood_polarity.dart';
 
 /// User-defined mood configuration.
@@ -54,7 +55,7 @@ class Mood extends HiveObject {
 
   /// Emoji character for display. Empty string if no emoji set.
   String get emojiCharacter =>
-      emojiCodePoint != null ? String.fromCharCode(emojiCodePoint!) : '';
+      emojiCodePoint != null ? emojiFromCodePoint(emojiCodePoint!) : '';
 
   Mood copyWith({
     String? id,
